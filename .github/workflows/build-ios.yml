@@ -8,6 +8,13 @@ on:
       - prototype/dates.js
       - prototype/vendor/**
       - .github/workflows/build-ios.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - ios/**
+      - prototype/dates.js
+      - prototype/vendor/**
+      - .github/workflows/build-ios.yml
   workflow_dispatch:
 
 permissions:
@@ -19,6 +26,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Verify Xcode and package the arm64 app
         run: |
           xcodebuild -version
@@ -44,8 +53,6 @@ jobs:
             -configuration Debug -destination "id=$device" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
             CODE_SIGNING_ALLOWED=NO build
           xcrun simctl bootstatus "$device" -b
-          xcrun simctl status_bar "$device" override --time "9:41" --dataNetwork wifi --wifiMode active \
-            --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
           xcrun simctl install "$device" "$RUNNER_TEMP/calendar-sim/Build/Products/Debug-iphonesimulator/PersonalCalendar.app"
           xcrun simctl launch "$device" app.personalglass.calendar
           sleep 3
