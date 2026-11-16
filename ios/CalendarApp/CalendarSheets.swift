@@ -157,7 +157,7 @@ struct CalendarEditor: View {
             if showYear {
                 Picker("农历年份", selection: $year) {
                     ForEach(CivilDay.first.year...CivilDay.last.year, id: \.self) { year in
-                        Text("\(year)年").tag(year)
+                        Text(verbatim: "\(year)年").tag(year)
                     }
                 }
             }
@@ -251,15 +251,16 @@ struct CalendarItemDetail: View {
     let day: CivilDay
 
     var body: some View {
-        let current = store.items.first { $0.id == item.id } ?? item
+        let current = store.allItems.first { $0.id == item.id } ?? item
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("类型", value: current.kind.label)
+                    LabeledContent("类型", value: current.displayKind)
+                    if let source = current.linkedSource { LabeledContent("同步来源", value: source) }
                     if let date = CivilDay(current.date) { LabeledContent("日期", value: date.label) }
                     if current.kind == .event {
                         LabeledContent("时间", value: current.timeLabel)
-                        LabeledContent("重复", value: (current.repeatRule ?? .none).label)
+                        if !current.isLinked { LabeledContent("重复", value: (current.repeatRule ?? .none).label) }
                     }
                     if let lunar = current.lunar { LabeledContent("农历", value: lunar.label) }
                     if current.kind == .birthday || (current.kind == .anniversary && current.annual == true) {
@@ -271,7 +272,9 @@ struct CalendarItemDetail: View {
                     if current.sample == true { LabeledContent("来源", value: "示例事项") }
                 }
                 if !current.note.isEmpty { Section("备注") { Text(current.note) } }
-                Section { Button("删除事项", role: .destructive) { deleting = true } }
+                if !current.isLinked {
+                    Section { Button("删除事项", role: .destructive) { deleting = true } }
+                }
             }
             .scrollContentBackground(.hidden)
             .background { CalendarTheme.background }
@@ -279,7 +282,9 @@ struct CalendarItemDetail: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("编辑") { editing = true } }
+                if !current.isLinked {
+                    ToolbarItem(placement: .confirmationAction) { Button("编辑") { editing = true } }
+                }
             }
             .sheet(isPresented: $editing) { CalendarEditor(day: day, item: current) }
             .confirmationDialog("删除这条事项？", isPresented: $deleting, titleVisibility: .visible) {
@@ -301,7 +306,7 @@ struct CalendarSearch: View {
 
     var body: some View {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matching = store.items.filter {
+        let matching = store.allItems.filter {
             term.isEmpty || $0.title.localizedCaseInsensitiveContains(term) || $0.note.localizedCaseInsensitiveContains(term)
         }.sorted { $0.date < $1.date }
         NavigationStack {
