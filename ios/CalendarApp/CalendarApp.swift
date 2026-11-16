@@ -127,7 +127,7 @@ struct CalendarHome: View {
             HStack(spacing: 8) {
                 Button { sheet = .date } label: {
                     HStack(spacing: 6) {
-                        Text(mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月")
+                        Text(verbatim: mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月")
                             .font(.title2.bold())
                             .monospacedDigit()
                             .lineLimit(1)
