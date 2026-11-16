@@ -54,10 +54,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO build
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" "$RUNNER_TEMP/calendar-sim/Build/Products/Debug-iphonesimulator/PersonalCalendar.app"
+          installed="$(xcrun simctl get_app_container "$device" app.personalglass.calendar app)"
+          test -f "$installed/PlugIns/PersonalCalendarWidgets.appex/PersonalCalendarWidgets"
           xcrun simctl launch "$device" app.personalglass.calendar
           sleep 3
           xcrun simctl spawn "$device" launchctl list | grep -F app.personalglass.calendar
           xcrun simctl io "$device" screenshot ios/build-output/iPhone-18-Pro-Max.png
+          xcrun simctl launch --terminate-running-process "$device" app.personalglass.calendar --verify-import-screen
+          sleep 2
+          xcrun simctl io "$device" screenshot ios/build-output/iPhone-18-Pro-Max-Import.png
       - name: Upload simulator screenshot and checksum
         uses: actions/upload-artifact@v7
         with:
@@ -65,4 +70,5 @@ jobs:
           path: |
             ios/build-output/PersonalCalendar.ipa.sha256
             ios/build-output/iPhone-18-Pro-Max.png
+            ios/build-output/iPhone-18-Pro-Max-Import.png
           if-no-files-found: error

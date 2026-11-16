@@ -49,13 +49,14 @@ enum CalendarMode: String, CaseIterable, Identifiable {
 }
 
 enum CalendarSheet: Identifiable {
-    case date, search, almanac, editor(CalendarItem?), item(CalendarItem)
+    case date, search, almanac, importSources, editor(CalendarItem?), item(CalendarItem)
 
     var id: String {
         switch self {
         case .date: return "date"
         case .search: return "search"
         case .almanac: return "almanac"
+        case .importSources: return "import-sources"
         case .editor(let item): return "editor-" + (item?.id ?? "new")
         case .item(let item): return "item-" + item.id
         }
@@ -65,6 +66,7 @@ enum CalendarSheet: Identifiable {
 struct CalendarHome: View {
     @EnvironmentObject private var store: CalendarStore
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var importer = SystemImport()
     @State private var today = CivilDay.today
     @State private var selection = CivilDay.today
     @State private var mode = CalendarMode.month
@@ -106,7 +108,37 @@ struct CalendarHome: View {
             .foregroundStyle(CalendarTheme.ink)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { today = .today }
+            if phase == .active {
+                today = .today
+                syncSystemItems()
+            }
+        }
+        .task(id: selection.monthStart) {
+            #if targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("--verify-import-screen") {
+                sheet = .importSources
+            }
+            #endif
+            await importer.refresh(around: selection, store: store)
+        }
+        .onReceive(importer.changes) { _ in
+            if scenePhase == .active { syncSystemItems() }
+        }
+        .onOpenURL { url in
+            guard url.scheme == "personalglasscalendar" else { return }
+            switch url.host {
+            case "today", "month":
+                today = .today
+                selection = today
+                mode = .month
+            case "day":
+                if let day = CivilDay(url.lastPathComponent), day.supported {
+                    selection = day
+                    mode = .month
+                }
+            default:
+                break
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
             today = .today
@@ -116,6 +148,7 @@ struct CalendarHome: View {
             case .date: DateJumpSheet(selection: $selection)
             case .search: CalendarSearch()
             case .almanac: AlmanacSheet(day: selection)
+            case .importSources: ImportSheet(importer: importer, day: selection)
             case .editor(let item): CalendarEditor(day: selection, item: item)
             case .item(let item): CalendarItemDetail(item: item, day: selection)
             }
@@ -127,7 +160,7 @@ struct CalendarHome: View {
             HStack(spacing: 8) {
                 Button { sheet = .date } label: {
                     HStack(spacing: 6) {
-                        Text(mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月")
+                        Text(verbatim: mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月")
                             .font(.title2.bold())
                             .monospacedDigit()
                             .lineLimit(1)
@@ -146,6 +179,7 @@ struct CalendarHome: View {
                         .padding(.horizontal, 10).frame(height: 44)
                         .glassEffect(.regular.interactive(), in: .capsule)
                 }
+                iconButton("square.and.arrow.down", "导入与同步") { sheet = .importSources }
                 iconButton("magnifyingglass", "搜索") { sheet = .search }
                 iconButton("plus", "新建事项", tint: CalendarTheme.accent) { sheet = .editor(nil) }
             }
@@ -262,6 +296,10 @@ struct CalendarHome: View {
 
     private func bounded(_ day: CivilDay) -> CivilDay { min(max(day, .first), .last) }
 
+    private func syncSystemItems() {
+        Task { await importer.refresh(around: selection, store: store) }
+    }
+
     private func navigate(_ direction: Int) {
         switch mode {
         case .month: selection = bounded(selection.movingMonths(direction))
@@ -275,7 +313,7 @@ struct CalendarItemRow: View {
     let item: CalendarItem
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: item.kind.icon)
+            Image(systemName: item.icon)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(item.kind.color)
                 .frame(width: 34, height: 34)

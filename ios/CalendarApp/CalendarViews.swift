@@ -56,21 +56,26 @@ struct MonthGrid: View {
     var body: some View {
         let first = selection.monthStart
         let count = ((first.weekday + selection.daysInMonth + 6) / 7) * 7
-        LazyVGrid(columns: columns, spacing: 3) {
-            ForEach(Array(CivilDay.weekdays.enumerated()), id: \.offset) { index, name in
-                Text(name).font(.caption.weight(.semibold))
-                    .foregroundStyle(index >= 5 ? CalendarTheme.accent : .secondary)
-                    .padding(.bottom, 5)
-            }
-            ForEach(0..<count, id: \.self) { offset in
-                let day = first.adding(offset - first.weekday)
-                Button { selection = day } label: {
-                    CalendarDayCell(day: day, selected: day == selection, isToday: day == today,
-                                    muted: day.month != selection.month, facts: store.engine.facts(day),
-                                    kinds: EventKind.allCases.filter { kind in store.items(on: day).contains { $0.kind == kind } })
+        VStack(spacing: 8) {
+            HStack(spacing: 1) {
+                ForEach(Array(CivilDay.weekdays.enumerated()), id: \.element) { index, name in
+                    Text(name)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(index >= 5 ? CalendarTheme.accent : .secondary)
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(!day.supported)
-                .buttonStyle(.plain)
+            }
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(0..<count, id: \.self) { offset in
+                    let day = first.adding(offset - first.weekday)
+                    Button { selection = day } label: {
+                        CalendarDayCell(day: day, selected: day == selection, isToday: day == today,
+                                        muted: day.month != selection.month, facts: store.engine.facts(day),
+                                        kinds: EventKind.allCases.filter { kind in store.items(on: day).contains { $0.kind == kind } })
+                    }
+                    .disabled(!day.supported)
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(.horizontal, 8)

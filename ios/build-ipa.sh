@@ -16,6 +16,12 @@ binary="$app/PersonalCalendar"
 test "$(lipo -archs "$binary")" = arm64
 test "$(plutil -extract MinimumOSVersion raw "$app/Info.plist")" = 27.0
 test -f "$app/lunar-1.7.8.js" -a -f "$app/dates.js" -a -f "$app/NativeBridge.js"
+widget="$app/PlugIns/PersonalCalendarWidgets.appex"
+test "$(lipo -archs "$widget/PersonalCalendarWidgets")" = arm64
+test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$widget/Info.plist")" = com.apple.widgetkit-extension
+test -f "$widget/lunar-1.7.8.js" -a -f "$widget/dates.js" -a -f "$widget/NativeBridge.js"
+plutil -extract NSRemindersFullAccessUsageDescription raw "$app/Info.plist" >/dev/null
+plutil -extract NSCalendarsFullAccessUsageDescription raw "$app/Info.plist" >/dev/null
 ditto "$app" "$build/staging/Payload/PersonalCalendar.app"
 ditto -c -k --keepParent "$build/staging/Payload" "$build/PersonalCalendar.ipa"
 unzip -tq "$build/PersonalCalendar.ipa"

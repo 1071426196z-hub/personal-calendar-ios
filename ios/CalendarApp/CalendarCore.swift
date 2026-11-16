@@ -10,8 +10,10 @@ struct CivilDay: Hashable, Comparable, Identifiable {
     }()
     static let first = CivilDay(1901, 1, 1)
     static let last = CivilDay(2100, 12, 31)
-    static var today: Self {
-        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: Date())
+    static var today: Self { localDay(containing: Date()) }
+
+    static func localDay(containing instant: Date) -> Self {
+        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: instant)
         return Self(parts.year!, parts.month!, parts.day!)
     }
 
@@ -122,14 +124,22 @@ struct CalendarItem: Codable, Identifiable {
     var lunar: LunarRule? = nil
     var note: String = ""
     var sample: Bool? = nil
+    var linkedSource: String? = nil
+    var reminderTime: String? = nil
+    var isSystemReminder: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, title, date, endDate, start, end, allDay, annual, lunar, note, sample
+        case linkedSource, reminderTime, isSystemReminder
         case repeatRule = "repeat"
     }
 
     var isTimed: Bool { kind == .event && allDay != true && start != nil && end != nil }
+    var icon: String { isSystemReminder == true ? "bell" : kind.icon }
+    var displayKind: String { isSystemReminder == true ? "提醒事项" : kind.label }
+    var isLinked: Bool { linkedSource != nil }
     var timeLabel: String {
+        if isSystemReminder == true { return reminderTime ?? "当天到期" }
         guard kind == .event else { return "" }
         let range: String
         if let endDate, endDate != date, let from = CivilDay(date), let to = CivilDay(endDate) {
@@ -153,7 +163,8 @@ struct CalendarItem: Codable, Identifiable {
         case .countdown: detail = countdownLabel
         case .birthday, .anniversary: detail = lunar?.label ?? ""
         }
-        return [kind.label, detail, sample == true ? "示例" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        return [displayKind, detail, linkedSource ?? "", sample == true ? "示例" : ""]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
 
@@ -266,6 +277,8 @@ final class CalendarEngine {
 
 final class CalendarStore: ObservableObject {
     @Published private(set) var items: [CalendarItem]
+    @Published private(set) var linkedItems: [CalendarItem] = []
+    var allItems: [CalendarItem] { items + linkedItems }
     let engine = CalendarEngine()
     private let defaults: UserDefaults
     private let storageKey = "personal-calendar-items-v1"
@@ -301,7 +314,7 @@ final class CalendarStore: ObservableObject {
     func items(on day: CivilDay) -> [CalendarItem] {
         if let list = occurrenceCache[day] { return list }
         let ids = engine.occurrences(recordJSON, on: day)
-        let list = items.filter { ids.contains($0.id) }.sorted {
+        let list = allItems.filter { ids.contains($0.id) }.sorted {
             ($0.isTimed ? 1 : 0, $0.start ?? "", $0.title) < ($1.isTimed ? 1 : 0, $1.start ?? "", $1.title)
         }
         if occurrenceCache.count >= 500 { occurrenceCache.removeAll(keepingCapacity: true) }
@@ -310,6 +323,7 @@ final class CalendarStore: ObservableObject {
     }
 
     func save(_ item: CalendarItem) {
+        guard !item.isLinked else { return }
         var updated = items
         if let index = updated.firstIndex(where: { $0.id == item.id }) {
             updated[index] = item
@@ -323,10 +337,16 @@ final class CalendarStore: ObservableObject {
         persist(items.filter { $0.id != id })
     }
 
+    func setLinkedItems(_ incoming: [CalendarItem]) {
+        recordJSON = CalendarEngine.encode(items + incoming) ?? "[]"
+        occurrenceCache.removeAll(keepingCapacity: true)
+        linkedItems = incoming
+    }
+
     private func persist(_ updated: [CalendarItem]) {
         guard let encoded = CalendarEngine.encode(updated) else { return }
         defaults.set(Data(encoded.utf8), forKey: storageKey)
-        recordJSON = encoded
+        recordJSON = CalendarEngine.encode(updated + linkedItems) ?? encoded
         occurrenceCache.removeAll(keepingCapacity: true)
         items = updated
     }
