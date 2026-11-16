@@ -114,6 +114,11 @@ struct CalendarHome: View {
             }
         }
         .task(id: selection.monthStart) {
+            #if targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("--verify-import-screen") {
+                sheet = .importSources
+            }
+            #endif
             await importer.refresh(around: selection, store: store)
         }
         .onReceive(importer.changes) { _ in
@@ -131,8 +136,6 @@ struct CalendarHome: View {
                     selection = day
                     mode = .month
                 }
-            case "import":
-                sheet = .importSources
             default:
                 break
             }
