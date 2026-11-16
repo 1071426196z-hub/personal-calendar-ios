@@ -1,0 +1,61 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ios/**
+      - prototype/dates.js
+      - prototype/vendor/**
+      - .github/workflows/build-ios.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Xcode and package the arm64 app
+        run: |
+          xcodebuild -version
+          bash ios/build-ipa.sh
+      - name: Upload IPA
+        uses: actions/upload-artifact@v7
+        with:
+          path: ios/build-output/PersonalCalendar.ipa
+          archive: false
+          if-no-files-found: error
+      - name: Launch on iPhone 18 Pro Max simulator
+        run: |
+          set -euo pipefail
+          device="$(xcrun simctl list devices booted -j | jq -r '[.devices[] | .[] | select(.name == "iPhone 18 Pro Max") | .udid] | first // empty')"
+          if [[ -z "$device" ]]; then
+            device="$(xcrun simctl list devices available -j | jq -r '
+              [.devices | to_entries | sort_by(.key) | reverse | .[] |
+                select(.key | contains("SimRuntime.iOS-27")) | .value[] |
+                select(.name == "iPhone 18 Pro Max") | .udid] | first // empty')"
+          fi
+          test -n "$device"
+          xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
+            -configuration Debug -destination "id=$device" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
+            CODE_SIGNING_ALLOWED=NO build
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl status_bar "$device" override --time "9:41" --dataNetwork wifi --wifiMode active \
+            --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
+          xcrun simctl install "$device" "$RUNNER_TEMP/calendar-sim/Build/Products/Debug-iphonesimulator/PersonalCalendar.app"
+          xcrun simctl launch "$device" app.personalglass.calendar
+          sleep 3
+          xcrun simctl spawn "$device" launchctl list | grep -F app.personalglass.calendar
+          xcrun simctl io "$device" screenshot ios/build-output/iPhone-18-Pro-Max.png
+      - name: Upload simulator screenshot and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: verification
+          path: |
+            ios/build-output/PersonalCalendar.ipa.sha256
+            ios/build-output/iPhone-18-Pro-Max.png
+          if-no-files-found: error

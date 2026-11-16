@@ -1,0 +1,301 @@
+import SwiftUI
+
+private struct CalendarDayCell: View {
+    let day: CivilDay
+    let selected: Bool
+    let isToday: Bool
+    let muted: Bool
+    let facts: DayFacts?
+    let kinds: [EventKind]
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text("\(day.day)")
+                .font(.system(size: 19, weight: selected || isToday ? .semibold : .medium))
+                .monospacedDigit()
+                .foregroundStyle(selected ? Color.white : isToday ? CalendarTheme.accent : CalendarTheme.ink.opacity(muted ? 0.34 : 1))
+                .frame(width: 30, height: 30)
+                .background(selected ? (isToday ? CalendarTheme.accent : CalendarTheme.ink) : .clear, in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if let shift = facts?.shift, !shift.isEmpty {
+                        Text(shift)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(shift == "休" ? Color.green : CalendarTheme.accent)
+                            .padding(2)
+                            .background(.white, in: Circle())
+                            .offset(x: 5, y: -1)
+                    }
+                }
+            Text(facts?.shortLabel ?? "")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(facts?.festival.isEmpty == false ? CalendarTheme.accent.opacity(muted ? 0.45 : 1) :
+                                     CalendarTheme.ink.opacity(muted ? 0.31 : 0.56))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 2) {
+                ForEach(kinds) { kind in
+                    Circle().fill(kind.color.opacity(muted ? 0.42 : 0.9)).frame(width: 4, height: 4)
+                }
+            }
+            .frame(height: 5)
+        }
+        .frame(maxWidth: .infinity, minHeight: 55)
+        .contentShape(Rectangle())
+        .accessibilityLabel([day.label, facts?.lunarText ?? "", facts?.festival ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: "，"))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+struct MonthGrid: View {
+    @EnvironmentObject private var store: CalendarStore
+    @Binding var selection: CivilDay
+    let today: CivilDay
+    private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 1), count: 7)
+
+    var body: some View {
+        let first = selection.monthStart
+        let count = ((first.weekday + selection.daysInMonth + 6) / 7) * 7
+        LazyVGrid(columns: columns, spacing: 3) {
+            ForEach(Array(CivilDay.weekdays.enumerated()), id: \.offset) { index, name in
+                Text(name).font(.caption.weight(.semibold))
+                    .foregroundStyle(index >= 5 ? CalendarTheme.accent : .secondary)
+                    .padding(.bottom, 5)
+            }
+            ForEach(0..<count, id: \.self) { offset in
+                let day = first.adding(offset - first.weekday)
+                Button { selection = day } label: {
+                    CalendarDayCell(day: day, selected: day == selection, isToday: day == today,
+                                    muted: day.month != selection.month, facts: store.engine.facts(day),
+                                    kinds: EventKind.allCases.filter { kind in store.items(on: day).contains { $0.kind == kind } })
+                }
+                .disabled(!day.supported)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 12)
+        .calendarCard()
+    }
+}
+
+struct YearGrid: View {
+    let selection: CivilDay
+    let today: CivilDay
+    let choose: (Int) -> Void
+    private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 7), count: 3)
+    private let days = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 0), count: 7)
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .center, spacing: 8) {
+            ForEach(1...12, id: \.self) { month in
+                Button { choose(month) } label: {
+                    miniMonth(month)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(selection.year)年\(month)月")
+                .accessibilityAddTraits(month == selection.month ? .isSelected : [])
+            }
+        }
+        .padding(8)
+        .calendarCard()
+    }
+
+    private func miniMonth(_ month: Int) -> some View {
+        let first = CivilDay(selection.year, month, 1)
+        return VStack(alignment: .leading, spacing: 7) {
+            Text("\(month)月")
+                .font(.subheadline.bold())
+                .foregroundStyle(month == selection.month ? CalendarTheme.accent : CalendarTheme.ink)
+            LazyVGrid(columns: days, spacing: 3) {
+                ForEach(CivilDay.weekdays, id: \.self) { name in
+                    Text(name).font(.system(size: 6, weight: .semibold)).foregroundStyle(.secondary)
+                }
+                ForEach(0..<42, id: \.self) { offset in
+                    let day = offset - first.weekday + 1
+                    let date = first.adding(offset - first.weekday)
+                    let highlighted = date == today || date == selection
+                    Text((1...first.daysInMonth).contains(day) ? "\(day)" : "")
+                        .font(.system(size: 8, weight: highlighted ? .bold : .medium).monospacedDigit())
+                        .foregroundStyle(highlighted ? .white : CalendarTheme.ink)
+                        .frame(maxWidth: .infinity, minHeight: 12)
+                        .background(highlighted && date.month == month ?
+                                    (date == today ? CalendarTheme.accent : CalendarTheme.ink) : .clear, in: Circle())
+                }
+            }
+        }
+        .padding(6)
+        .background(month == selection.month ? CalendarTheme.accent.opacity(0.08) : .white.opacity(0.42),
+                    in: RoundedRectangle(cornerRadius: 13))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+    }
+}
+
+struct WeekGrid: View {
+    @EnvironmentObject private var store: CalendarStore
+    @Binding var selection: CivilDay
+    let today: CivilDay
+    let open: (CalendarItem) -> Void
+    private let hourHeight: CGFloat = 50
+    private let gutter: CGFloat = 30
+
+    private struct Entry: Identifiable {
+        let item: CalendarItem
+        let from: Int
+        let to: Int
+        var lane: Int = 0
+        var width: Int = 1
+        var id: String { "\(item.id)-\(from)-\(to)-\(lane)" }
+    }
+
+    var body: some View {
+        let start = selection.weekStart
+        let days = (0..<7).map { start.adding($0) }
+        let columns = days.map(entries)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: gutter, height: 1)
+                ForEach(days) { day in
+                    VStack(spacing: 0) {
+                        Text(CivilDay.weekdays[day.weekday]).font(.caption2).foregroundStyle(.secondary)
+                        Button { selection = day } label: {
+                            CalendarDayCell(day: day, selected: selection == day, isToday: today == day,
+                                            muted: false, facts: store.engine.facts(day), kinds: [])
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!day.supported)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.top, 9)
+            allDayRow(days)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    timeline(days: days, columns: columns)
+                }
+                .frame(height: 305)
+                .defaultScrollAnchor(.top)
+                .onAppear {
+                    proxy.scrollTo(Self.initialHour(columns), anchor: .top)
+                }
+                .onChange(of: start) { _, _ in
+                    proxy.scrollTo(Self.initialHour(columns), anchor: .top)
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+        .calendarCard()
+    }
+
+    private static func initialHour(_ columns: [[Entry]]) -> Int {
+        let earliest = columns.flatMap { $0 }.map(\.from).min() ?? 480
+        return min(8, earliest / 60)
+    }
+
+    private func allDayRow(_ days: [CivilDay]) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Text("全天").font(.system(size: 8)).foregroundStyle(.secondary)
+                .frame(width: gutter, alignment: .leading)
+                .padding(.top, 4)
+            ForEach(days) { day in
+                VStack(spacing: 3) {
+                    ForEach(store.items(on: day).filter { !$0.isTimed }) { item in
+                        Button { open(item) } label: {
+                            eventTile(item)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .top)
+                .padding(.horizontal, 1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func timeline(days: [CivilDay], columns: [[Entry]]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(0..<24, id: \.self) { hour in
+                HStack(alignment: .top, spacing: 0) {
+                    Text(String(format: "%02d:00", hour))
+                        .font(.system(size: 8).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: gutter, alignment: .leading)
+                    Rectangle().fill(.secondary.opacity(0.18)).frame(height: 1)
+                }
+                .frame(height: hourHeight, alignment: .top)
+                .id(hour)
+            }
+        }
+        .background {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: gutter)
+                ForEach(days) { day in
+                    Rectangle()
+                        .fill(day == selection ? CalendarTheme.accent.opacity(0.06) : .clear)
+                        .overlay(alignment: .leading) { Rectangle().fill(.secondary.opacity(0.13)).frame(width: 1) }
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .overlay(alignment: .top) {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: gutter)
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, entries in
+                    GeometryReader { geometry in
+                        ForEach(entries) { entry in
+                            let width = geometry.size.width / CGFloat(entry.width)
+                            Button { open(entry.item) } label: { eventTile(entry.item) }
+                                .buttonStyle(.plain)
+                                .frame(width: max(1, width - 2),
+                                       height: max(16, y(entry.to - entry.from) - 2), alignment: .topLeading)
+                                .background(entry.item.kind.color.opacity(0.13), in: RoundedRectangle(cornerRadius: 5))
+                                .offset(x: width * CGFloat(entry.lane) + 1, y: y(entry.from))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func y(_ minutes: Int) -> CGFloat { CGFloat(minutes) / 60 * hourHeight }
+
+    private func eventTile(_ item: CalendarItem) -> some View {
+        Text(item.title)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(item.kind.color)
+            .lineLimit(2)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(item.kind.color.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+    }
+
+    private func entries(_ day: CivilDay) -> [Entry] {
+        var result = store.items(on: day).flatMap { item in
+            store.engine.segments(item, on: day).map { Entry(item: item, from: $0.from, to: $0.to) }
+        }
+        result.sort { ($0.from, -$0.to) < ($1.from, -$1.to) }
+        var groupStart = 0
+        var groupEnd = 0
+        var laneEnds: [Int] = []
+        for index in result.indices {
+            let current = result[index]
+            if current.from >= groupEnd {
+                for index in groupStart..<index { result[index].width = laneEnds.count }
+                groupStart = index
+                laneEnds.removeAll(keepingCapacity: true)
+            }
+            groupEnd = max(groupEnd, current.to)
+            let lane = laneEnds.firstIndex { $0 <= current.from } ?? laneEnds.count
+            if lane == laneEnds.count { laneEnds.append(current.to) } else { laneEnds[lane] = current.to }
+            result[index].lane = lane
+        }
+        for index in groupStart..<result.count { result[index].width = laneEnds.count }
+        return result
+    }
+}

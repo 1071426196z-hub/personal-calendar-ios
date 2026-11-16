@@ -1,0 +1,42 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		CA1E00000000000000000020 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarApp.swift"; sourceTree = "<group>"; };
+		CA1E00000000000000000021 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarCore.swift"; sourceTree = "<group>"; };
+		CA1E00000000000000000022 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarViews.swift"; sourceTree = "<group>"; };
+		CA1E00000000000000000023 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarSheets.swift"; sourceTree = "<group>"; };
+		CA1E00000000000000000024 = { isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "NativeBridge.js"; sourceTree = "<group>"; };
+		CA1E00000000000000000025 = { isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "../prototype/dates.js"; sourceTree = SOURCE_ROOT; };
+		CA1E00000000000000000026 = { isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "../prototype/vendor/lunar-1.7.8.js"; sourceTree = SOURCE_ROOT; };
+		CA1E00000000000000000027 = { isa = PBXFileReference; lastKnownFileType = text; path = "../prototype/vendor/lunar-1.7.8.LICENSE.txt"; sourceTree = SOURCE_ROOT; };
+		CA1E00000000000000000028 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		CA1E00000000000000000040 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000020; };
+		CA1E00000000000000000041 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000021; };
+		CA1E00000000000000000042 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000022; };
+		CA1E00000000000000000043 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000023; };
+		CA1E00000000000000000044 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000024; };
+		CA1E00000000000000000045 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000025; };
+		CA1E00000000000000000046 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000026; };
+		CA1E00000000000000000047 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000027; };
+		CA1E00000000000000000048 = { isa = PBXBuildFile; fileRef = CA1E00000000000000000028; };
+		CA1E00000000000000000006 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = PersonalCalendar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CA1E00000000000000000002 = { isa = PBXGroup; children = (CA1E00000000000000000003, CA1E00000000000000000004,); sourceTree = "<group>"; };
+		CA1E00000000000000000003 = { isa = PBXGroup; children = (CA1E00000000000000000020, CA1E00000000000000000021, CA1E00000000000000000022, CA1E00000000000000000023, CA1E00000000000000000024, CA1E00000000000000000025, CA1E00000000000000000026, CA1E00000000000000000027, CA1E00000000000000000028,); path = CalendarApp; sourceTree = "<group>"; };
+		CA1E00000000000000000004 = { isa = PBXGroup; children = (CA1E00000000000000000006,); name = Products; sourceTree = "<group>"; };
+		CA1E00000000000000000007 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (CA1E00000000000000000040, CA1E00000000000000000041, CA1E00000000000000000042, CA1E00000000000000000043,); runOnlyForDeploymentPostprocessing = 0; };
+		CA1E00000000000000000008 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (CA1E00000000000000000044, CA1E00000000000000000045, CA1E00000000000000000046, CA1E00000000000000000047, CA1E00000000000000000048,); runOnlyForDeploymentPostprocessing = 0; };
+		CA1E00000000000000000009 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		CA1E00000000000000000005 = { isa = PBXNativeTarget; buildConfigurationList = CA1E0000000000000000000B; buildPhases = (CA1E00000000000000000007, CA1E00000000000000000009, CA1E00000000000000000008,); buildRules = (); dependencies = (); name = PersonalCalendar; productName = PersonalCalendar; productReference = CA1E00000000000000000006; productType = "com.apple.product-type.application"; };
+		CA1E00000000000000000001 = { isa = PBXProject; attributes = { LastSwiftUpdateCheck = 2700; LastUpgradeCheck = 2700; }; buildConfigurationList = CA1E0000000000000000000A; compatibilityVersion = "Xcode 14.0"; developmentRegion = "zh-Hans"; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = CA1E00000000000000000002; productRefGroup = CA1E00000000000000000004; projectDirPath = ""; projectRoot = ""; targets = (CA1E00000000000000000005,); };
+		CA1E0000000000000000000A = { isa = XCConfigurationList; buildConfigurations = (CA1E0000000000000000000C, CA1E0000000000000000000D,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		CA1E0000000000000000000B = { isa = XCConfigurationList; buildConfigurations = (CA1E0000000000000000000E, CA1E0000000000000000000F,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		CA1E0000000000000000000C = { isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 27.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		CA1E0000000000000000000D = { isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 27.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; SWIFT_COMPILATION_MODE = wholemodule; VALIDATE_PRODUCT = YES; }; name = Release; };
+		CA1E0000000000000000000E = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "日历"; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = app.personalglass.calendar; PRODUCT_NAME = PersonalCalendar; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		CA1E0000000000000000000F = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "日历"; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = app.personalglass.calendar; PRODUCT_NAME = PersonalCalendar; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+	};
+	rootObject = CA1E00000000000000000001;
+}
