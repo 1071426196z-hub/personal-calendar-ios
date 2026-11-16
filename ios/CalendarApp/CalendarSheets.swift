@@ -157,7 +157,7 @@ struct CalendarEditor: View {
             if showYear {
                 Picker("农历年份", selection: $year) {
                     ForEach(CivilDay.first.year...CivilDay.last.year, id: \.self) { year in
-                        Text("\(year)年").tag(year)
+                        Text(verbatim: "\(year)年").tag(year)
                     }
                 }
             }
