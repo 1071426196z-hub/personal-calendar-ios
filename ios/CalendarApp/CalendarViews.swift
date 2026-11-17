@@ -197,7 +197,6 @@ struct YearGrid: View {
     let today: CivilDay
     let choose: (Int) -> Void
     private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 7), count: 3)
-    private let days = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 0), count: 7)
 
     var body: some View {
         LazyVGrid(columns: columns, alignment: .center, spacing: 8) {
@@ -215,33 +214,49 @@ struct YearGrid: View {
     }
 
     private func miniMonth(_ month: Int) -> some View {
-        let first = CivilDay(selection.year, month, 1)
-        return VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 7) {
             Text("\(month)月")
                 .font(.subheadline.bold())
                 .foregroundStyle(month == selection.month ? CalendarTheme.accent : CalendarTheme.ink)
-            LazyVGrid(columns: days, spacing: 3) {
-                ForEach(CivilDay.weekdays, id: \.self) { name in
-                    Text(name).font(.system(size: 6, weight: .semibold)).foregroundStyle(.secondary)
-                }
-                ForEach(0..<42, id: \.self) { offset in
-                    let day = offset - first.weekday + 1
-                    let date = first.adding(offset - first.weekday)
-                    let highlighted = date == today || date == selection
-                    Text((1...first.daysInMonth).contains(day) ? "\(day)" : "")
-                        .font(.system(size: 8, weight: highlighted ? .bold : .medium).monospacedDigit())
-                        .foregroundStyle(highlighted ? .white : CalendarTheme.ink)
-                        .frame(maxWidth: .infinity, minHeight: 12)
-                        .background(highlighted && date.month == month ?
-                                    (date == today ? CalendarTheme.accent : CalendarTheme.ink) : .clear, in: Circle())
-                }
-            }
+            miniMonthDays(for: CivilDay(selection.year, month, 1))
         }
         .padding(6)
         .background(month == selection.month ? CalendarTheme.accent.opacity(0.08) : .white.opacity(0.42),
                     in: RoundedRectangle(cornerRadius: 13))
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
+    }
+
+    private func miniMonthDays(for first: CivilDay) -> some View {
+        let month = first.month
+        let weekdayOffset = first.weekday
+        let count = first.daysInMonth
+        let selectedDay = selection.month == month ? selection.day : nil
+        let currentDay = today.year == first.year && today.month == month ? today.day : nil
+        let rowHeight: CGFloat = 15
+        return Canvas { context, size in
+            let columnWidth = size.width / 7
+            for (column, weekday) in CivilDay.weekdays.enumerated() {
+                let center = CGPoint(x: (CGFloat(column) + 0.5) * columnWidth, y: 6)
+                context.draw(Text(weekday).font(.system(size: 6, weight: .semibold)).foregroundStyle(.secondary), at: center)
+            }
+            for day in 1...count {
+                let index = weekdayOffset + day - 1
+                let center = CGPoint(x: (CGFloat(index % 7) + 0.5) * columnWidth,
+                                     y: 6 + CGFloat(index / 7 + 1) * rowHeight)
+                let highlighted = day == currentDay || day == selectedDay
+                if highlighted {
+                    let circle = CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
+                    context.fill(Path(ellipseIn: circle), with: .color(day == currentDay ? CalendarTheme.accent : CalendarTheme.ink))
+                }
+                let label = Text("\(day)")
+                    .font(.system(size: 8, weight: highlighted ? .bold : .medium).monospacedDigit())
+                    .foregroundStyle(highlighted ? Color.white : CalendarTheme.ink)
+                context.draw(label, at: center)
+            }
+        }
+        .frame(height: 6 * rowHeight + 12)
+        .accessibilityHidden(true)
     }
 }
 

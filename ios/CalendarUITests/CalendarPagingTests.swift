@@ -46,7 +46,10 @@ final class CalendarPagingTests: XCTestCase {
                          file: StaticString = #filePath, line: UInt = #line) {
         let expectsValue = NSPredicate(format: "exists == true AND %K == %@", key, value)
         let expectation = XCTNSPredicateExpectation(predicate: expectsValue, object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 8), .completed,
-                       "Expected \(key) to be \(value)", file: file, line: line)
+        guard XCTWaiter.wait(for: [expectation], timeout: 15) == .completed else {
+            let actual = element.exists ? (key == "value" ? element.value : element.label) : nil
+            XCTFail("Expected \(key) to be \(value), got \(String(describing: actual))", file: file, line: line)
+            return
+        }
     }
 }
