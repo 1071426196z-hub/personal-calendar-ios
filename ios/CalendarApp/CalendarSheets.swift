@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UserNotifications
 
 struct DateJumpSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -40,8 +42,11 @@ struct DateJumpSheet: View {
 struct CalendarEditor: View {
     @EnvironmentObject private var store: CalendarStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     private let original: CalendarItem?
     private let selection: CivilDay
+    private let action: CalendarEditorAction
     @State private var kind: EventKind
     @State private var title: String
     @State private var date: Date
@@ -55,11 +60,14 @@ struct CalendarEditor: View {
     @State private var lunar: LunarRule
     @State private var year: Int
     @State private var note: String
+    @State private var reminder: CalendarReminder?
+    @State private var notificationsDenied = false
     @State private var error: String?
 
-    init(day: CivilDay, item: CalendarItem?) {
+    init(day: CivilDay, item: CalendarItem?, action: CalendarEditorAction = .edit) {
         original = item
         selection = day
+        self.action = action
         let from = item.flatMap { CivilDay($0.date) } ?? day
         _kind = State(initialValue: item?.kind ?? .event)
         _title = State(initialValue: item?.title ?? "")
@@ -74,6 +82,7 @@ struct CalendarEditor: View {
         _lunar = State(initialValue: item?.lunar ?? LunarRule(month: 1, day: 1, leap: false))
         _year = State(initialValue: from.year)
         _note = State(initialValue: item?.note ?? "")
+        _reminder = State(initialValue: item?.reminder)
     }
 
     var body: some View {
@@ -103,6 +112,7 @@ struct CalendarEditor: View {
                     case .countdown: datePicker("目标日期", value: $date)
                     }
                 }
+                reminderSection
                 Section("备注") {
                     TextField("添加备注", text: $note, axis: .vertical).lineLimit(3...6)
                 }
@@ -111,7 +121,7 @@ struct CalendarEditor: View {
             .background { CalendarTheme.background }
             .environment(\.timeZone, CivilDay.calendar.timeZone)
             .environment(\.calendar, CivilDay.calendar)
-            .navigationTitle(original == nil ? "新建事项" : "编辑事项")
+            .navigationTitle(original == nil ? "新建事项" : action.rawValue)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -129,10 +139,41 @@ struct CalendarEditor: View {
                 year = CivilDay(date).year - (monthStartsInPreviousYear ? 1 : 0)
             }
         }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            notificationsDenied = (await UNUserNotificationCenter.current().notificationSettings()).authorizationStatus == .denied
+        }
         .alert("请检查日期和时间", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("确定", role: .cancel) { error = nil }
         } message: {
             Text(error ?? "")
+        }
+    }
+
+    private var reminderChoices: [CalendarReminder] {
+        kind == .event && !allDay ? [.atStart, .tenMinutes, .oneHour, .oneDay, .morning] : [.morning, .oneDay]
+    }
+
+    private var reminderSection: some View {
+        Section {
+            Picker("提醒时间", selection: $reminder) {
+                Text("无提醒").tag(Optional<CalendarReminder>.none)
+                ForEach(reminderChoices) { option in Text(option.title).tag(Optional(option)) }
+            }
+            .accessibilityIdentifier("editor-reminder")
+            if reminder != nil {
+                if notificationsDenied { Text("系统通知已关闭。开启权限后会按这里设置的时间提醒。").font(.footnote) }
+                Button("锁屏、横幅和声音设置") {
+                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+                }
+            }
+        } header: {
+            Text("通知")
+        } footer: {
+            Text("在 iOS 设置中选择通知显示位置。灵动岛倒计时可在事项详情单独开启。")
+        }
+        .onChange(of: reminderChoices) { _, choices in
+            if let reminder, !choices.contains(reminder) { self.reminder = .morning }
         }
     }
 
@@ -200,8 +241,10 @@ struct CalendarEditor: View {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { return }
         let from = CivilDay(date)
-        var item = CalendarItem(id: original?.id ?? UUID().uuidString, kind: kind, title: cleanTitle,
-                                date: from.key, note: note, sample: original?.sample)
+        let edited = action == .copy ? nil : original
+        var item = CalendarItem(id: edited?.id ?? UUID().uuidString, kind: kind, title: cleanTitle,
+                                date: from.key, note: note,
+                                reminder: reminder, calendarImportID: edited?.calendarImportID)
         switch kind {
         case .event:
             let to = CivilDay(endDate)
@@ -249,6 +292,7 @@ struct CalendarEditor: View {
         case .countdown: break
         }
         store.save(item)
+        if reminder != nil { Task { await CalendarNotifications.shared.requestPermission(for: store) } }
         dismiss()
     }
 }
@@ -258,6 +302,9 @@ struct CalendarItemDetail: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editing = false
     @State private var deleting = false
+    @State private var liveScheduled = false
+    @State private var liveBusy = false
+    @State private var liveMessage: String?
     let item: CalendarItem
     let day: CivilDay
 
@@ -280,10 +327,12 @@ struct CalendarItemDetail: View {
                         }
                     }
                     if current.kind == .countdown { LabeledContent("倒数", value: current.countdownLabel) }
+                    if let reminder = current.reminder { LabeledContent("通知提醒", value: reminder.title) }
                     if current.sample == true { LabeledContent("来源", value: "示例事项") }
                 }
                 if !current.note.isEmpty { Section("备注") { Text(current.note) } }
                 if !current.isLinked {
+                    liveSection(for: current)
                     Section { Button("删除事项", role: .destructive) { deleting = true } }
                 }
             }
@@ -298,6 +347,10 @@ struct CalendarItemDetail: View {
                 }
             }
             .sheet(isPresented: $editing) { CalendarEditor(day: day, item: current) }
+            .onAppear { liveScheduled = CalendarLiveActivities.isScheduled(for: current.id) }
+            .onChange(of: editing) { _, presented in
+                if !presented { liveScheduled = CalendarLiveActivities.isScheduled(for: current.id) }
+            }
             .confirmationDialog("删除这条事项？", isPresented: $deleting, titleVisibility: .visible) {
                 Button("删除", role: .destructive) {
                     store.remove(current.id)
@@ -306,6 +359,117 @@ struct CalendarItemDetail: View {
                 Button("取消", role: .cancel) {}
             }
         }
+    }
+
+    @ViewBuilder private func liveSection(for item: CalendarItem) -> some View {
+        if let target = CalendarLiveActivities.nextTime(for: item, store: store) {
+            Section {
+                Button {
+                    liveBusy = true
+                    liveMessage = nil
+                    Task {
+                        defer { liveBusy = false }
+                        if liveScheduled {
+                            await CalendarLiveActivities.stop(for: item.id)
+                            liveScheduled = false
+                        } else {
+                            do {
+                                try await CalendarLiveActivities.start(for: item, target: target)
+                                liveScheduled = true
+                            } catch {
+                                liveMessage = error.localizedDescription
+                            }
+                        }
+                    }
+                } label: {
+                    Label(liveScheduled ? "关闭灵动岛倒计时" : "开启灵动岛倒计时", systemImage: "timer")
+                }
+                .disabled(liveBusy)
+                .accessibilityIdentifier("live-activity-control")
+                if let liveMessage { Text(liveMessage).font(.caption).foregroundStyle(.secondary) }
+            } header: {
+                Text("实时活动")
+            } footer: {
+                Text("到事项开始前 30 分钟，在锁屏和灵动岛显示倒计时。")
+            }
+        }
+    }
+}
+
+struct UpcomingCalendarSheet: View {
+    @EnvironmentObject private var store: CalendarStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var route: Destination?
+
+    private enum Destination: Identifiable {
+        case details(CalendarItem, CivilDay)
+        case edit(CalendarItem, CivilDay, CalendarEditorAction)
+
+        var id: String {
+            switch self {
+            case .details(let item, _): item.id
+            case .edit(let item, _, let action): item.id + action.rawValue
+            }
+        }
+    }
+
+    var body: some View {
+        let today = CivilDay.today
+        let days = (0..<7).map { today.adding($0) }.filter(\.supported)
+        let milestones = upcomingMilestones(after: today.adding(7))
+        NavigationStack {
+            List {
+                if days.allSatisfy({ store.items(on: $0).isEmpty }) {
+                    ContentUnavailableView("未来 7 天没有安排", systemImage: "calendar")
+                }
+                ForEach(days) { day in
+                    let items = store.items(on: day)
+                    if !items.isEmpty {
+                        Section(day == today ? "今天" : day.label + " · " + day.weekdayLabel) {
+                            ForEach(items) { item in itemButton(item, on: day) }
+                        }
+                    }
+                }
+                if !milestones.isEmpty {
+                    Section("之后的重要日期") {
+                        ForEach(milestones, id: \.item.id) { entry in
+                            itemButton(entry.item, on: entry.day, showDate: true)
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background { CalendarTheme.background }
+            .navigationTitle("接下来")
+            .navigationBarTitleDisplayMode(.inline)
+            .accessibilityIdentifier("upcoming-calendar-sheet")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .sheet(item: $route) { destination in
+                switch destination {
+                case .details(let item, let day): CalendarItemDetail(item: item, day: day)
+                case .edit(let item, let day, let action): CalendarEditor(day: day, item: item, action: action)
+                }
+            }
+        }
+    }
+
+    private func upcomingMilestones(after day: CivilDay) -> [(item: CalendarItem, day: CivilDay)] {
+        let dated = store.items.compactMap { item -> (item: CalendarItem, day: CivilDay)? in
+            guard item.kind != .event, let upcoming = store.engine.nextOccurrence(of: item, onOrAfter: day) else { return nil }
+            return (item, upcoming)
+        }
+        return Array(dated.sorted { ($0.day, $0.item.title) < ($1.day, $1.item.title) }.prefix(5))
+    }
+
+    private func itemButton(_ item: CalendarItem, on day: CivilDay, showDate: Bool = false) -> some View {
+        Button { route = .details(item, day) } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                CalendarItemRow(item: item)
+                if showDate { Text(day.label).font(.caption).foregroundStyle(.secondary).padding(.leading, 44) }
+            }
+        }
+        .buttonStyle(.plain)
+        .calendarItemMenu(item) { route = .edit(item, day, $0) }
     }
 }
 

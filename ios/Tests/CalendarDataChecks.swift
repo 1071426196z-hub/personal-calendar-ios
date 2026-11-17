@@ -5,7 +5,62 @@ enum CalendarDataChecks {
     static func main() throws {
         checkTimeZones()
         try checkHolidayFeed()
-        print("Calendar time-zone and holiday data checks passed")
+        try checkBackupAndCalendarFiles()
+        checkReminders()
+        print("Calendar time-zone, holiday, reminder and file checks passed")
+    }
+
+    private static func checkReminders() {
+        let zone = TimeZone(identifier: "America/Los_Angeles")!
+        let calendar = CivilDay.localCalendar(in: zone)
+        let target = CivilDay(2027, 3, 14)
+        let item = CalendarItem(kind: .anniversary, title: "Anniversary", date: target.key, annual: true, reminder: .oneDay)
+        let reminder = item.reminderFireDate(on: target, in: calendar)!
+        precondition(CivilDay.localDay(containing: reminder, in: zone) == target.adding(-1))
+        precondition(CivilDay.timeKey(reminder, in: calendar) == "09:00")
+        let event = CalendarItem(kind: .event, title: "Meeting", date: target.key, start: "09:30", end: "10:00",
+                                 reminder: .tenMinutes)
+        precondition(CivilDay.timeKey(event.reminderFireDate(on: target, in: calendar)!, in: calendar) == "09:20")
+    }
+
+    private static func checkBackupAndCalendarFiles() throws {
+        let special = CalendarItem(id: "test-birthday", kind: .birthday, title: "Birthday", date: "2027-02-06",
+                                   lunar: LunarRule(month: 1, day: 1, leap: false), note: "Note", reminder: .morning)
+        let data = try JSONEncoder().encode(CalendarArchive(items: [special]))
+        let restored = try CalendarArchive.read(data)
+        precondition(restored == [special])
+
+        let ics = Data("""
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        BEGIN:VEVENT
+        UID:single-test
+        DTSTART:20270101T233000Z
+        DTEND:20270102T003000Z
+        SUMMARY:跨日\\,日程
+         标题
+        DESCRIPTION:说明\\n备注
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:all-day-test
+        DTSTART;VALUE=DATE:20270102
+        DTEND;VALUE=DATE:20270105
+        SUMMARY:全天日程
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:unsupported-test
+        DTSTART;VALUE=DATE:20270101
+        RRULE:FREQ=WEEKLY;COUNT=3
+        END:VEVENT
+        END:VCALENDAR
+        """.utf8)
+        let imported = try CalendarICS.read(ics, displayTimeZone: TimeZone(identifier: "Asia/Shanghai")!)
+        precondition(imported.skipped == 1 && imported.items.count == 2)
+        let timed = imported.items[0]
+        precondition(timed.date == "2027-01-02" && timed.start == "07:30" && timed.title == "跨日,日程标题")
+        precondition(timed.note == "说明\n备注" && timed.startInstant != nil && timed.calendarImportID == "single-test")
+        let allDay = imported.items[1]
+        precondition(allDay.allDay == true && allDay.endDate == "2027-01-04")
     }
 
     private static func checkTimeZones() {

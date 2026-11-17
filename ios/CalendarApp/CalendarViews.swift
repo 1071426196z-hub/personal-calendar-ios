@@ -7,6 +7,8 @@ struct CalendarPager: View {
     let today: CivilDay
     @Binding var previewMonthPage: Int?
     let showMonth: (CivilDay) -> Void
+    let newItem: (CivilDay) -> Void
+    let editItem: (CalendarItem, CalendarEditorAction) -> Void
     let openItem: (CalendarItem) -> Void
 
     @State private var position: ScrollPosition
@@ -15,12 +17,15 @@ struct CalendarPager: View {
     @State private var heights: [Int: CGFloat] = [:]
 
     init(mode: CalendarMode, selection: Binding<CivilDay>, today: CivilDay, previewMonthPage: Binding<Int?>,
-         showMonth: @escaping (CivilDay) -> Void, openItem: @escaping (CalendarItem) -> Void) {
+         showMonth: @escaping (CivilDay) -> Void, newItem: @escaping (CivilDay) -> Void,
+         editItem: @escaping (CalendarItem, CalendarEditorAction) -> Void, openItem: @escaping (CalendarItem) -> Void) {
         self.mode = mode
         self._selection = selection
         self.today = today
         self._previewMonthPage = previewMonthPage
         self.showMonth = showMonth
+        self.newItem = newItem
+        self.editItem = editItem
         self.openItem = openItem
         let initial = mode.page(containing: selection.wrappedValue)
         var startingPosition = ScrollPosition(idType: Int.self)
@@ -96,9 +101,9 @@ struct CalendarPager: View {
         let day = mode.day(on: page, matching: selection)
         switch mode {
         case .month:
-            MonthGrid(selection: day, today: today, select: select)
+            MonthGrid(selection: day, today: today, select: select, newItem: newItem)
         case .week:
-            WeekGrid(selection: day, today: today, select: select, open: openItem)
+            WeekGrid(selection: day, today: today, select: select, newItem: newItem, open: openItem, edit: editItem)
         case .year:
             YearGrid(selection: day, today: today) { month in
                 showMonth(day.movingMonths(month - day.month))
@@ -179,6 +184,7 @@ struct MonthGrid: View {
     let selection: CivilDay
     let today: CivilDay
     let select: (CivilDay) -> Void
+    let newItem: (CivilDay) -> Void
     private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 1), count: 7)
 
     var body: some View {
@@ -203,6 +209,11 @@ struct MonthGrid: View {
                     }
                     .disabled(!day.supported)
                     .buttonStyle(CalendarDateButtonStyle())
+                    .contextMenu {
+                        if day.supported {
+                            Button { newItem(day) } label: { Label("新建事项", systemImage: "plus") }
+                        }
+                    }
                 }
             }
         }
@@ -286,7 +297,9 @@ struct WeekGrid: View {
     let selection: CivilDay
     let today: CivilDay
     let select: (CivilDay) -> Void
+    let newItem: (CivilDay) -> Void
     let open: (CalendarItem) -> Void
+    let edit: (CalendarItem, CalendarEditorAction) -> Void
     private let hourHeight: CGFloat = 50
     private let gutter: CGFloat = 30
 
@@ -315,6 +328,11 @@ struct WeekGrid: View {
                         }
                         .buttonStyle(CalendarDateButtonStyle())
                         .disabled(!day.supported)
+                        .contextMenu {
+                            if day.supported {
+                                Button { newItem(day) } label: { Label("新建事项", systemImage: "plus") }
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -358,6 +376,7 @@ struct WeekGrid: View {
                             eventTile(item)
                         }
                         .buttonStyle(.plain)
+                        .calendarItemMenu(item) { edit(item, $0) }
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 22, alignment: .top)
@@ -405,6 +424,7 @@ struct WeekGrid: View {
                                        height: max(16, y(entry.to - entry.from) - 2), alignment: .topLeading)
                                 .background(entry.item.kind.color.opacity(0.13), in: RoundedRectangle(cornerRadius: 5))
                                 .offset(x: width * CGFloat(entry.lane) + 1, y: y(entry.from))
+                                .calendarItemMenu(entry.item) { edit(entry.item, $0) }
                         }
                     }
                 }

@@ -1,4 +1,5 @@
 import AppIntents
+import ActivityKit
 import SwiftUI
 import WidgetKit
 
@@ -371,5 +372,55 @@ struct PersonalCalendarWidgets: WidgetBundle {
         TodayAndMonthWidget()
         CountdownWidget()
         AnniversaryWidget()
+        CalendarLiveWidget()
+    }
+}
+
+private struct CalendarLiveWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: CalendarLiveAttributes.self) { context in
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.clock").font(.title3).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(context.state.title).font(.headline).lineLimit(2).privacySensitive()
+                    Text(context.state.target, style: .time).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                timer(context).font(.title3.weight(.semibold))
+            }
+            .padding(16)
+            .widgetURL(context.attributes.link)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) { Image(systemName: "calendar.badge.clock").foregroundStyle(.red) }
+                DynamicIslandExpandedRegion(.trailing) { timer(context) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack {
+                        Text(context.state.title).lineLimit(1).privacySensitive()
+                        Spacer(minLength: 6)
+                        Text(context.state.target, style: .time).foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                }
+            } compactLeading: {
+                Image(systemName: "calendar").foregroundStyle(.red)
+            } compactTrailing: {
+                timer(context).font(.caption.weight(.semibold))
+            } minimal: {
+                Image(systemName: "calendar").foregroundStyle(.red)
+            }
+            .widgetURL(context.attributes.link)
+        }
+    }
+
+    @ViewBuilder private func timer(_ context: ActivityViewContext<CalendarLiveAttributes>) -> some View {
+        if context.isStale {
+            Text("已到时间")
+        } else {
+            Text(timerInterval: context.state.begins...context.state.target, countsDown: true, showsHours: false)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
     }
 }

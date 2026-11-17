@@ -128,6 +128,10 @@ final class SystemImport: ObservableObject {
             switch source {
             case .calendars:
                 events = SystemFeed.events(eventStore, calendars: active, around: day, in: timeZone)
+                let today = CivilDay.today
+                if today.monthStart != day.monthStart {
+                    events += SystemFeed.events(eventStore, calendars: active, around: today, in: timeZone)
+                }
             case .reminders:
                 let loaded = await SystemFeed.reminders(eventStore, calendars: active, in: timeZone)
                 reminders = loaded.dated
@@ -259,6 +263,25 @@ struct ImportSheet: View {
                 } footer: {
                     Text("会显示 iPhone 系统日历和提醒事项里的记录，包括已同步到系统的其他 App。源记录在原 App 中编辑。")
                 }
+                Section("文件与跨设备") {
+                    NavigationLink {
+                        CalendarTransferSheet(kind: .backup)
+                    } label: {
+                        Label("备份与恢复", systemImage: "externaldrive")
+                    }
+                    .accessibilityIdentifier("calendar-backup")
+                    NavigationLink {
+                        CalendarTransferSheet(kind: .calendar)
+                    } label: {
+                        Label("导入 .ics 日历", systemImage: "doc")
+                    }
+                    NavigationLink {
+                        XiaomiCalendarSheet(importer: importer, day: day)
+                    } label: {
+                        Label("小米手机日历", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .accessibilityIdentifier("xiaomi-calendar-source")
+                }
                 ForEach(SystemSource.allCases) { source in
                     if importer.enabled.contains(source), importer.allowed(source),
                        let lists = importer.lists[source], !lists.isEmpty {
@@ -328,5 +351,50 @@ struct ImportSheet: View {
 
     private func needsSettings(_ source: SystemSource) -> Bool {
         importer.access[source] == .denied || importer.access[source] == .restricted || importer.access[source] == .writeOnly
+    }
+}
+
+private struct XiaomiCalendarSheet: View {
+    @EnvironmentObject private var store: CalendarStore
+    @Environment(\.openURL) private var openURL
+    @ObservedObject var importer: SystemImport
+    let day: CivilDay
+
+    var body: some View {
+        Form {
+            Section("通过共同账户同步") {
+                Text("在小米手机上，将要同步的日程保存到 Google 或 Exchange 日历账户。")
+                Text("在 iPhone 的「设置 → App → 日历 → 日历账户」中添加同一账户并开启日历。")
+                Button(importer.enabled.contains(.calendars) ? "刷新系统日历" : "允许读取系统日历") {
+                    Task {
+                        if importer.enabled.contains(.calendars), importer.allowed(.calendars) {
+                            await importer.refresh(around: day, store: store)
+                        } else {
+                            await importer.setEnabled(true, source: .calendars, store: store)
+                        }
+                    }
+                }
+                .disabled(importer.isRefreshing || importer.requesting != nil)
+                if importer.access[.calendars] == .denied || importer.access[.calendars] == .restricted {
+                    Button("打开 App 权限设置") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                }
+                if let message = importer.message { Text(message).foregroundStyle(.secondary) }
+                if importer.allowed(.calendars), importer.enabled.contains(.calendars) {
+                    Text("回到「导入与同步」，可以选择要显示的日历。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Section("迁移小米云中的日程") {
+                Text("小米账户日历暂时无法直接连接。已有 .ics 文件时，可以导入本 App。")
+                NavigationLink("导入 .ics 文件") { CalendarTransferSheet(kind: .calendar) }
+                Link("打开小米云服务", destination: URL(string: "https://i.mi.com/")!)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background { CalendarTheme.background }
+        .navigationTitle("小米手机日历")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

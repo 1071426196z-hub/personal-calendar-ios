@@ -135,7 +135,23 @@ struct LunarRule: Codable, Equatable {
     var label: String { (leap ? "闰" : "") + Self.months[month - 1] + Self.days[day - 1] }
 }
 
-struct CalendarItem: Codable, Identifiable {
+enum CalendarReminder: String, CaseIterable, Codable, Identifiable {
+    case atStart, tenMinutes, oneHour, oneDay, morning
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .atStart: "开始时"
+        case .tenMinutes: "提前 10 分钟"
+        case .oneHour: "提前 1 小时"
+        case .oneDay: "提前 1 天"
+        case .morning: "当天上午 9:00"
+        }
+    }
+}
+
+struct CalendarItem: Codable, Equatable, Identifiable {
     var id = UUID().uuidString
     var kind: EventKind
     var title: String
@@ -154,10 +170,13 @@ struct CalendarItem: Codable, Identifiable {
     var isSystemReminder: Bool? = nil
     var startInstant: Date? = nil
     var endInstant: Date? = nil
+    var reminder: CalendarReminder? = nil
+    var calendarImportID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, title, date, endDate, start, end, allDay, annual, lunar, note, sample
         case linkedSource, reminderTime, isSystemReminder, startInstant, endInstant
+        case reminder, calendarImportID
         case repeatRule = "repeat"
     }
 
@@ -175,6 +194,27 @@ struct CalendarItem: Codable, Identifiable {
         item.start = CivilDay.timeKey(startInstant, in: calendar)
         item.end = CivilDay.timeKey(endInstant, in: calendar)
         return item
+    }
+
+    func reminderFireDate(on day: CivilDay, in calendar: Calendar) -> Date? {
+        guard let reminder else { return nil }
+        let anchor: Date?
+        if reminder == .morning || !isTimed {
+            anchor = day.instant(at: "09:00", in: calendar.timeZone)
+        } else if (repeatRule ?? .none) == .none, let startInstant {
+            anchor = startInstant
+        } else if let start {
+            anchor = day.instant(at: start, in: calendar.timeZone)
+        } else {
+            anchor = nil
+        }
+        guard let anchor else { return nil }
+        switch reminder {
+        case .atStart, .morning: return anchor
+        case .tenMinutes: return anchor.addingTimeInterval(-600)
+        case .oneHour: return anchor.addingTimeInterval(-3_600)
+        case .oneDay: return calendar.date(byAdding: .day, value: -1, to: anchor)
+        }
     }
     var timeLabel: String {
         if isSystemReminder == true { return reminderTime ?? "当天到期" }
@@ -313,6 +353,38 @@ final class CalendarEngine {
         return key.flatMap(CivilDay.init)
     }
 
+    func nextOccurrence(of item: CalendarItem, onOrAfter day: CivilDay) -> CivilDay? {
+        guard let start = CivilDay(item.date), day.supported else { return nil }
+        if start >= day { return start.supported ? start : nil }
+
+        if item.kind == .event {
+            switch item.repeatRule ?? .none {
+            case .none: return nil
+            case .daily: return day
+            case .weekly: return start.adding(((start.distance(to: day) + 6) / 7) * 7)
+            case .monthly:
+                let offset = (day.year - start.year) * 12 + day.month - start.month
+                let candidate = start.movingMonths(offset)
+                return candidate >= day ? candidate : start.movingMonths(offset + 1)
+            case .yearly:
+                let offset = (day.year - start.year) * 12
+                let candidate = start.movingMonths(offset)
+                return candidate >= day ? candidate : start.movingMonths(offset + 12)
+            }
+        }
+
+        guard item.kind == .birthday || (item.kind == .anniversary && item.annual == true) else { return nil }
+        if let rule = item.lunar {
+            for year in max(CivilDay.first.year, day.year - 1)...CivilDay.last.year {
+                if let occurrence = lunarDay(year: year, rule: rule), occurrence >= day, occurrence.supported {
+                    return occurrence
+                }
+            }
+            return nil
+        }
+        return upcoming(item, from: day)
+    }
+
     func almanac(_ day: CivilDay, includeHours: Bool = false) -> AlmanacData? {
         if let cached = almanacCache[day], !includeHours || !cached.hours.isEmpty { return cached }
         let result: AlmanacData? = value("almanac", [day.key, includeHours])
@@ -404,6 +476,20 @@ final class CalendarStore: ObservableObject {
 
     func remove(_ id: String) {
         persist(items.filter { $0.id != id })
+    }
+
+    @discardableResult
+    func mergePersonalItems(_ incoming: [CalendarItem]) -> Int {
+        var ids = Set(items.map(\.id))
+        var imported = Set(items.compactMap(\.calendarImportID))
+        let additions = incoming.filter { item in
+            guard !item.isLinked, !ids.contains(item.id) else { return false }
+            if let key = item.calendarImportID, !imported.insert(key).inserted { return false }
+            ids.insert(item.id)
+            return true
+        }
+        if !additions.isEmpty { persist(items + additions) }
+        return additions.count
     }
 
     func setLinkedItems(_ incoming: [CalendarItem]) {

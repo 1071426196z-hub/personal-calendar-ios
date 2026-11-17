@@ -15,5 +15,7 @@
     <string>用于在日历中显示你选择同步的系统日程。源日程在原 App 中编辑。</string>
     <key>NSRemindersFullAccessUsageDescription</key>
     <string>用于在日历中显示你选择同步的提醒事项。源提醒在原 App 中编辑。</string>
+    <key>NSSupportsLiveActivities</key>
+    <true/>
 </dict>
 </plist>

@@ -5,12 +5,14 @@ import WidgetKit
 
 @main
 struct PersonalCalendarApp: App {
+    @UIApplicationDelegateAdaptor(CalendarNotificationDelegate.self) private var notifications
     @StateObject private var store = CalendarStore()
 
     var body: some Scene {
         WindowGroup {
             CalendarHome()
                 .environmentObject(store)
+                .environmentObject(notifications)
                 .environment(\.locale, Locale(identifier: "zh-Hans-CN"))
                 .preferredColorScheme(.light)
                 .tint(CalendarTheme.accent)
@@ -81,7 +83,8 @@ enum CalendarMode: String, CaseIterable, Identifiable {
 }
 
 enum CalendarSheet: Identifiable {
-    case date, search, almanac, importSources, editor(CalendarItem?), item(CalendarItem)
+    case date, search, almanac, importSources, upcoming
+    case editor(CivilDay, CalendarItem?, CalendarEditorAction), item(CalendarItem)
 
     var id: String {
         switch self {
@@ -89,7 +92,8 @@ enum CalendarSheet: Identifiable {
         case .search: return "search"
         case .almanac: return "almanac"
         case .importSources: return "import-sources"
-        case .editor(let item): return "editor-" + (item?.id ?? "new")
+        case .upcoming: return "upcoming"
+        case .editor(let day, let item, let action): return "editor-\(action.rawValue)-" + (item?.id ?? day.key)
         case .item(let item): return "item-" + item.id
         }
     }
@@ -97,6 +101,7 @@ enum CalendarSheet: Identifiable {
 
 struct CalendarHome: View {
     @EnvironmentObject private var store: CalendarStore
+    @EnvironmentObject private var notifications: CalendarNotificationDelegate
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var importer = SystemImport()
@@ -136,9 +141,9 @@ struct CalendarHome: View {
                 ScrollView {
                     VStack(spacing: 8) {
                         CalendarPager(mode: mode, selection: $selection, today: today,
-                                      previewMonthPage: $previewMonthPage, showMonth: showMonth) {
-                            sheet = .item($0)
-                        }
+                                      previewMonthPage: $previewMonthPage, showMonth: showMonth,
+                                      newItem: { sheet = .editor($0, nil, .edit) },
+                                      editItem: { sheet = .editor(selection, $0, $1) }, openItem: { sheet = .item($0) })
                         .id(mode)
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
 
@@ -166,6 +171,7 @@ struct CalendarHome: View {
             if phase == .active {
                 updateClock()
                 syncSystemItems()
+                refreshAlerts()
             }
         }
         .task(id: scenePhase) {
@@ -190,6 +196,12 @@ struct CalendarHome: View {
         .onReceive(importer.changes) { _ in
             if scenePhase == .active { syncSystemItems() }
         }
+        .onChange(of: store.items) { _, _ in refreshAlerts() }
+        .onReceive(notifications.$route) { route in
+            guard let route else { return }
+            showItem(id: route.itemID, on: route.day)
+            notifications.clearRoute()
+        }
         .onOpenURL { url in
             guard url.scheme == "personalglasscalendar" else { return }
             switch url.host {
@@ -202,6 +214,10 @@ struct CalendarHome: View {
                     selection = day
                     mode = .month
                 }
+            case "item":
+                if let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value {
+                    showItem(id: id)
+                }
             default:
                 break
             }
@@ -210,6 +226,7 @@ struct CalendarHome: View {
             .merge(with: NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange))
             .merge(with: NotificationCenter.default.publisher(for: .NSCalendarDayChanged))) { _ in
             if updateClock(), scenePhase == .active { syncSystemItems() }
+            if scenePhase == .active { refreshAlerts() }
         }
         .sheet(item: $sheet) { target in
             switch target {
@@ -217,7 +234,8 @@ struct CalendarHome: View {
             case .search: CalendarSearch()
             case .almanac: AlmanacSheet(day: selection)
             case .importSources: ImportSheet(importer: importer, day: selection)
-            case .editor(let item): CalendarEditor(day: selection, item: item)
+            case .upcoming: UpcomingCalendarSheet()
+            case .editor(let day, let item, let action): CalendarEditor(day: day, item: item, action: action)
             case .item(let item): CalendarItemDetail(item: item, day: selection)
             }
         }
@@ -253,7 +271,7 @@ struct CalendarHome: View {
                 }
                 iconButton("square.and.arrow.down", "导入与同步") { sheet = .importSources }
                 iconButton("magnifyingglass", "搜索") { sheet = .search }
-                iconButton("plus", "新建事项", tint: CalendarTheme.accent) { sheet = .editor(nil) }
+                iconButton("plus", "新建事项", tint: CalendarTheme.accent) { sheet = .editor(selection, nil, .edit) }
             }
             HStack(spacing: 8) {
                 iconButton("chevron.left", "上一\(mode.rawValue)") { navigate(-1) }
@@ -342,7 +360,12 @@ struct CalendarHome: View {
             HStack {
                 Text("当天安排").font(.headline)
                 Spacer()
-                Button { sheet = .editor(nil) } label: {
+                Button("接下来") { sheet = .upcoming }
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("upcoming-agenda")
+                Button { sheet = .editor(selection, nil, .edit) } label: {
                     Label("新建", systemImage: "plus")
                         .font(.subheadline.weight(.semibold))
                         .frame(minHeight: 44)
@@ -360,6 +383,7 @@ struct CalendarHome: View {
                     CalendarItemRow(item: item)
                 }
                 .buttonStyle(.plain)
+                .calendarItemMenu(item) { sheet = .editor(selection, item, $0) }
                 .transition(.opacity)
             }
         }
@@ -386,6 +410,19 @@ struct CalendarHome: View {
         Task { await importer.refresh(around: selection, store: store) }
     }
 
+    private func refreshAlerts() {
+        CalendarNotifications.shared.refresh(store)
+        Task { await CalendarLiveActivities.reconcile(store) }
+    }
+
+    private func showItem(id: String, on day: CivilDay? = nil) {
+        guard let item = store.allItems.first(where: { $0.id == id }) else { return }
+        let date = day ?? store.engine.nextOccurrence(of: item, onOrAfter: today) ?? CivilDay(item.date)
+        if let date, date.supported { selection = date }
+        mode = .month
+        sheet = .item(item)
+    }
+
     @discardableResult
     private func updateClock() -> Bool {
         let zone = TimeZone(identifier: TimeZone.autoupdatingCurrent.identifier) ?? .current
@@ -406,6 +443,24 @@ struct CalendarHome: View {
     private func showMonth(_ day: CivilDay) {
         selection = day
         mode = .month
+    }
+}
+
+enum CalendarEditorAction: String {
+    case edit = "编辑事项", copy = "复制事项", reschedule = "改期"
+}
+
+extension View {
+    @ViewBuilder
+    func calendarItemMenu(_ item: CalendarItem, perform: @escaping (CalendarEditorAction) -> Void) -> some View {
+        if item.isLinked {
+            self
+        } else {
+            self.contextMenu {
+                Button { perform(.copy) } label: { Label("复制事项", systemImage: "plus.square.on.square") }
+                Button { perform(.reschedule) } label: { Label("改期", systemImage: "calendar") }
+            }
+        }
     }
 }
 

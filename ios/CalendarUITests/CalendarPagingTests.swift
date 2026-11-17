@@ -38,6 +38,13 @@ final class CalendarPagingTests: XCTestCase {
         waitFor(period, key: "value", toEqual: "2027年")
         app.buttons["calendar-year-month-2027-3"].tap()
         waitFor(period, key: "value", toEqual: "2027年3月")
+
+        app.buttons["upcoming-agenda"].tap()
+        XCTAssertTrue(app.navigationBars["接下来"].waitForExistence(timeout: 8))
+        app.navigationBars["接下来"].buttons["完成"].tap()
+        app.buttons["导入与同步"].tap()
+        XCTAssertTrue(app.buttons["calendar-backup"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["xiaomi-calendar-source"].exists)
     }
 
     private func waitFor(_ element: XCUIElement, key: String, toEqual value: String,
