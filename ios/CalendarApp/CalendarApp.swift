@@ -46,6 +46,35 @@ extension View {
 enum CalendarMode: String, CaseIterable, Identifiable {
     case month = "月", week = "周", year = "年"
     var id: Self { self }
+
+    var pageCount: Int { page(containing: .last) + 1 }
+
+    var estimatedHeight: CGFloat {
+        switch self {
+        case .month: 413
+        case .week: 428
+        case .year: 588
+        }
+    }
+
+    func page(containing day: CivilDay) -> Int {
+        switch self {
+        case .month: (day.year - CivilDay.first.year) * 12 + day.month - 1
+        case .week: CivilDay.first.weekStart.distance(to: day.weekStart) / 7
+        case .year: day.year - CivilDay.first.year
+        }
+    }
+
+    func day(on page: Int, matching selection: CivilDay) -> CivilDay {
+        let offset = page - self.page(containing: selection)
+        let target: CivilDay
+        switch self {
+        case .month: target = selection.movingMonths(offset)
+        case .week: target = selection.adding(7 * offset)
+        case .year: target = selection.movingMonths(12 * offset)
+        }
+        return min(max(target, .first), .last)
+    }
 }
 
 enum CalendarSheet: Identifiable {
@@ -66,11 +95,25 @@ enum CalendarSheet: Identifiable {
 struct CalendarHome: View {
     @EnvironmentObject private var store: CalendarStore
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var importer = SystemImport()
     @State private var today = CivilDay.today
-    @State private var selection = CivilDay.today
+    @State private var selection = CalendarHome.initialSelection
     @State private var mode = CalendarMode.month
     @State private var sheet: CalendarSheet?
+
+    private static var initialSelection: CivilDay {
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--verify-calendar-paging") {
+            return CivilDay(2026, 11, 17)
+        }
+        #endif
+        return .today
+    }
+
+    private var periodTitle: String {
+        mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月"
+    }
 
     var body: some View {
         ZStack {
@@ -81,25 +124,25 @@ struct CalendarHome: View {
                     .padding(.vertical, 6)
 
                 ScrollView {
-                    VStack(spacing: 14) {
-                        switch mode {
-                        case .month: MonthGrid(selection: $selection, today: today)
-                        case .week:
-                            WeekGrid(selection: $selection, today: today) { sheet = .item($0) }
-                        case .year:
-                            YearGrid(selection: selection, today: today) { month in
-                                selection = bounded(selection.movingMonths(month - selection.month))
-                                mode = .month
-                            }
+                    VStack(spacing: 8) {
+                        CalendarPager(mode: mode, selection: $selection, today: today, showMonth: showMonth) {
+                            sheet = .item($0)
                         }
+                        .id(mode)
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+
                         if mode != .year {
-                            selectedDay
-                            agenda
+                            VStack(spacing: 14) {
+                                selectedDay
+                                agenda
+                            }
+                            .padding(.horizontal, 16)
+                            .transition(reduceMotion ? .identity : .opacity)
                         }
                     }
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: mode)
                     .frame(maxWidth: 720)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 4)
                     .padding(.bottom, 24)
                     .frame(maxWidth: .infinity)
                 }
@@ -160,11 +203,13 @@ struct CalendarHome: View {
             HStack(spacing: 8) {
                 Button { sheet = .date } label: {
                     HStack(spacing: 6) {
-                        Text(verbatim: mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月")
+                        Text(verbatim: periodTitle)
                             .font(.title2.bold())
                             .monospacedDigit()
                             .lineLimit(1)
                             .minimumScaleFactor(0.65)
+                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(mode.page(containing: selection))))
+                            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: mode.page(containing: selection))
                         Image(systemName: "chevron.down")
                             .font(.caption2.bold())
                     }
@@ -173,6 +218,8 @@ struct CalendarHome: View {
                     .glassEffect(.regular.interactive(), in: .capsule)
                 }
                 .accessibilityLabel("选择日期")
+                .accessibilityValue(Text(verbatim: periodTitle))
+                .accessibilityIdentifier("calendar-period")
                 Spacer(minLength: 0)
                 Button { sheet = .almanac } label: {
                     Text("黄历").font(.subheadline.weight(.semibold))
@@ -185,6 +232,7 @@ struct CalendarHome: View {
             }
             HStack(spacing: 8) {
                 iconButton("chevron.left", "上一\(mode.rawValue)") { navigate(-1) }
+                    .disabled(mode.page(containing: selection) == 0)
                 Picker("日历视图", selection: $mode) {
                     ForEach(CalendarMode.allCases) { option in
                         Text(option.rawValue).tag(option)
@@ -193,6 +241,7 @@ struct CalendarHome: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("calendar-mode")
                 iconButton("chevron.right", "下一\(mode.rawValue)") { navigate(1) }
+                    .disabled(mode.page(containing: selection) == mode.pageCount - 1)
                 Button { selection = today } label: {
                     Text("今天").font(.subheadline.weight(.semibold))
                         .foregroundStyle(CalendarTheme.accent)
@@ -212,20 +261,28 @@ struct CalendarHome: View {
         let message = distance == 0 ? "今天" : (distance > 0 ? "距今天还有 \(distance) 天" : "\(-distance) 天前")
         return VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(selection.month)月\(selection.day)日").font(.title2.bold())
-                Text(selection.weekdayLabel).font(.subheadline).foregroundStyle(.secondary)
+                Text("\(selection.month)月\(selection.day)日")
+                    .font(.title2.bold())
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: selection.date.timeIntervalSinceReferenceDate))
+                    .accessibilityIdentifier("calendar-selected-date")
+                Text(selection.weekdayLabel)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(reduceMotion ? .identity : .opacity)
                 Spacer()
                 Text(message)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(CalendarTheme.accent)
                     .padding(.horizontal, 9).padding(.vertical, 5)
                     .background(CalendarTheme.accent.opacity(0.09), in: Capsule())
+                    .contentTransition(reduceMotion ? .identity : .opacity)
             }
             if let facts {
                 Text([facts.lunarText, facts.festival, facts.term ?? "", facts.shiftText]
                     .filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .contentTransition(reduceMotion ? .identity : .opacity)
             }
             if let almanac = store.engine.almanac(selection) {
                 Divider()
@@ -233,8 +290,10 @@ struct CalendarHome: View {
                     HStack(spacing: 8) {
                         Text("宜").foregroundStyle(.green)
                         Text(almanac.yi.prefix(3).joined(separator: "、")).lineLimit(1)
+                            .contentTransition(reduceMotion ? .identity : .opacity)
                         Text("忌").foregroundStyle(CalendarTheme.accent)
                         Text(almanac.ji.prefix(3).joined(separator: "、")).lineLimit(1)
+                            .contentTransition(reduceMotion ? .identity : .opacity)
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right").font(.caption2)
                     }
@@ -249,6 +308,7 @@ struct CalendarHome: View {
         }
         .padding(16)
         .calendarCard()
+        .animation(reduceMotion ? nil : .smooth(duration: 0.23), value: selection)
     }
 
     private var agenda: some View {
@@ -268,18 +328,21 @@ struct CalendarHome: View {
             if items.isEmpty {
                 Text("当天没有安排").font(.subheadline).foregroundStyle(.secondary)
                     .padding(.bottom, 8)
+                    .transition(.opacity)
             }
             ForEach(items) { item in
                 Button { sheet = .item(item) } label: {
                     CalendarItemRow(item: item)
                 }
                 .buttonStyle(.plain)
+                .transition(.opacity)
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .padding(.bottom, 14)
         .calendarCard()
+        .animation(reduceMotion ? nil : .smooth(duration: 0.23), value: selection)
     }
 
     private func iconButton(_ icon: String, _ label: String, tint: Color = CalendarTheme.ink,
@@ -294,18 +357,19 @@ struct CalendarHome: View {
         .accessibilityLabel(label)
     }
 
-    private func bounded(_ day: CivilDay) -> CivilDay { min(max(day, .first), .last) }
-
     private func syncSystemItems() {
         Task { await importer.refresh(around: selection, store: store) }
     }
 
     private func navigate(_ direction: Int) {
-        switch mode {
-        case .month: selection = bounded(selection.movingMonths(direction))
-        case .week: selection = bounded(selection.adding(direction * 7))
-        case .year: selection = bounded(selection.movingMonths(direction * 12))
-        }
+        let page = mode.page(containing: selection) + direction
+        guard (0..<mode.pageCount).contains(page) else { return }
+        selection = mode.day(on: page, matching: selection)
+    }
+
+    private func showMonth(_ day: CivilDay) {
+        selection = day
+        mode = .month
     }
 }
 
