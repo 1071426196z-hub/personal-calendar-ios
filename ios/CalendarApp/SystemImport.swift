@@ -116,6 +116,7 @@ final class SystemImport: ObservableObject {
         var events: [CalendarItem] = []
         var reminders: [CalendarItem] = []
         var unscheduled: [String] = []
+        let timeZone = store.timeZone
         for source in connected {
             let calendars = eventStore.calendars(for: source.entityType)
             systemLists[source] = calendars.map {
@@ -126,9 +127,13 @@ final class SystemImport: ObservableObject {
             guard !active.isEmpty else { continue }
             switch source {
             case .calendars:
-                events = SystemFeed.events(eventStore, calendars: active, around: day)
+                events = SystemFeed.events(eventStore, calendars: active, around: day, in: timeZone)
+                let today = CivilDay.today
+                if today.monthStart != day.monthStart {
+                    events += SystemFeed.events(eventStore, calendars: active, around: today, in: timeZone)
+                }
             case .reminders:
-                let loaded = await SystemFeed.reminders(eventStore, calendars: active)
+                let loaded = await SystemFeed.reminders(eventStore, calendars: active, in: timeZone)
                 reminders = loaded.dated
                 unscheduled = loaded.undated
             }
@@ -157,10 +162,11 @@ final class SystemImport: ObservableObject {
 }
 
 enum SystemFeed {
-    static func events(_ store: EKEventStore, calendars: [EKCalendar], around date: CivilDay) -> [CalendarItem] {
+    static func events(_ store: EKEventStore, calendars: [EKCalendar], around date: CivilDay,
+                       in timeZone: TimeZone) -> [CalendarItem] {
         let first = date.monthStart.movingMonths(-1)
         let last = date.monthStart.movingMonths(2)
-        let calendar = Calendar(identifier: .gregorian)
+        let calendar = CivilDay.localCalendar(in: timeZone)
         let start = calendar.date(from: DateComponents(year: first.year, month: first.month, day: 1)) ?? first.date
         let end = calendar.date(from: DateComponents(year: last.year, month: last.month, day: 1)) ?? last.date
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
@@ -168,38 +174,42 @@ enum SystemFeed {
             guard let start = event.startDate, let finish = event.endDate else { return nil }
             let allDay = event.isAllDay
             let effectiveEnd = allDay && finish > start ? finish.addingTimeInterval(-1) : max(start, finish)
-            let from = CivilDay.localDay(containing: start)
-            let to = CivilDay.localDay(containing: effectiveEnd)
+            let dateZone = allDay ? event.timeZone ?? timeZone : timeZone
+            let from = CivilDay.localDay(containing: start, in: dateZone)
+            let to = CivilDay.localDay(containing: effectiveEnd, in: dateZone)
             var item = CalendarItem(id: "system-event:\(event.calendarItemIdentifier):\(start.timeIntervalSinceReferenceDate)",
                                     kind: .event, title: event.title ?? "无标题日程", date: from.key,
                                     endDate: to.key, repeatRule: RepeatRule.none, allDay: allDay,
                                     note: event.notes ?? "", linkedSource: event.calendar?.title ?? "系统日历")
             if !allDay {
-                item.start = timeKey(start)
-                item.end = timeKey(max(finish, start.addingTimeInterval(60)))
-                item.endDate = CivilDay.localDay(containing: max(finish, start.addingTimeInterval(60))).key
+                let adjustedEnd = max(finish, start.addingTimeInterval(60))
+                item.start = CivilDay.timeKey(start, in: calendar)
+                item.end = CivilDay.timeKey(adjustedEnd, in: calendar)
+                item.endDate = CivilDay.localDay(containing: adjustedEnd, in: timeZone).key
             }
             return item
         }
     }
 
     @MainActor
-    static func reminders(_ store: EKEventStore, calendars: [EKCalendar]) async -> (dated: [CalendarItem], undated: [String]) {
+    static func reminders(_ store: EKEventStore, calendars: [EKCalendar],
+                          in timeZone: TimeZone) async -> (dated: [CalendarItem], undated: [String]) {
         let predicate = store.predicateForReminders(in: calendars)
         let fetched: [EKReminder] = await withCheckedContinuation { continuation in
             _ = store.fetchReminders(matching: predicate) { continuation.resume(returning: $0 ?? []) }
         }
         var dated: [CalendarItem] = []
         var undated: [String] = []
+        let calendar = CivilDay.localCalendar(in: timeZone)
         for reminder in fetched where !reminder.isCompleted {
             let title = reminder.title ?? "无标题提醒"
             guard let due = reminder.dueDateComponents ?? reminder.startDateComponents,
-                  let instant = instant(from: due) else {
+                  let instant = instant(from: due, in: timeZone) else {
                 undated.append(title)
                 continue
             }
-            let day = CivilDay.localDay(containing: instant)
-            let time = due.hour.map { _ in timeKey(instant) }
+            let day = CivilDay.localDay(containing: instant, in: timeZone)
+            let time = due.hour.map { _ in CivilDay.timeKey(instant, in: calendar) }
             var item = CalendarItem(id: "system-reminder:\(reminder.calendarItemIdentifier)",
                                     kind: .event, title: title, date: day.key, endDate: day.key,
                                     repeatRule: RepeatRule.none, allDay: time == nil, note: reminder.notes ?? "",
@@ -207,9 +217,9 @@ enum SystemFeed {
                                     reminderTime: time, isSystemReminder: true)
             if let time {
                 let finish = instant.addingTimeInterval(60)
-                let endDay = CivilDay.localDay(containing: finish)
+                let endDay = CivilDay.localDay(containing: finish, in: timeZone)
                 item.start = time
-                item.end = endDay == day ? timeKey(finish) : "00:00"
+                item.end = endDay == day ? CivilDay.timeKey(finish, in: calendar) : "00:00"
                 item.endDate = endDay.key
             }
             dated.append(item)
@@ -217,19 +227,15 @@ enum SystemFeed {
         return (dated, undated.sorted { $0.localizedStandardCompare($1) == .orderedAscending })
     }
 
-    private static func instant(from input: DateComponents) -> Date? {
+    private static func instant(from input: DateComponents, in timeZone: TimeZone) -> Date? {
         var calendar = input.calendar ?? Calendar(identifier: .gregorian)
-        calendar.timeZone = input.hour == nil ? .current : (input.timeZone ?? .current)
+        calendar.timeZone = input.hour == nil ? timeZone : (input.timeZone ?? timeZone)
         var parts = input
         parts.calendar = calendar
         parts.timeZone = calendar.timeZone
         return calendar.date(from: parts)
     }
 
-    private static func timeKey(_ time: Date) -> String {
-        let pieces = Calendar(identifier: .gregorian).dateComponents([.hour, .minute], from: time)
-        return String(format: "%02d:%02d", pieces.hour ?? 0, pieces.minute ?? 0)
-    }
 }
 
 struct ImportSheet: View {
@@ -256,6 +262,25 @@ struct ImportSheet: View {
                     }
                 } footer: {
                     Text("会显示 iPhone 系统日历和提醒事项里的记录，包括已同步到系统的其他 App。源记录在原 App 中编辑。")
+                }
+                Section("文件与跨设备") {
+                    NavigationLink {
+                        CalendarTransferSheet(kind: .backup)
+                    } label: {
+                        Label("备份与恢复", systemImage: "externaldrive")
+                    }
+                    .accessibilityIdentifier("calendar-backup")
+                    NavigationLink {
+                        CalendarTransferSheet(kind: .calendar)
+                    } label: {
+                        Label("导入 .ics 日历", systemImage: "doc")
+                    }
+                    NavigationLink {
+                        XiaomiCalendarSheet(importer: importer, day: day)
+                    } label: {
+                        Label("小米手机日历", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .accessibilityIdentifier("xiaomi-calendar-source")
                 }
                 ForEach(SystemSource.allCases) { source in
                     if importer.enabled.contains(source), importer.allowed(source),
@@ -326,5 +351,50 @@ struct ImportSheet: View {
 
     private func needsSettings(_ source: SystemSource) -> Bool {
         importer.access[source] == .denied || importer.access[source] == .restricted || importer.access[source] == .writeOnly
+    }
+}
+
+private struct XiaomiCalendarSheet: View {
+    @EnvironmentObject private var store: CalendarStore
+    @Environment(\.openURL) private var openURL
+    @ObservedObject var importer: SystemImport
+    let day: CivilDay
+
+    var body: some View {
+        Form {
+            Section("通过共同账户同步") {
+                Text("在小米手机上，将要同步的日程保存到 Google 或 Exchange 日历账户。")
+                Text("在 iPhone 的「设置 → App → 日历 → 日历账户」中添加同一账户并开启日历。")
+                Button(importer.enabled.contains(.calendars) ? "刷新系统日历" : "允许读取系统日历") {
+                    Task {
+                        if importer.enabled.contains(.calendars), importer.allowed(.calendars) {
+                            await importer.refresh(around: day, store: store)
+                        } else {
+                            await importer.setEnabled(true, source: .calendars, store: store)
+                        }
+                    }
+                }
+                .disabled(importer.isRefreshing || importer.requesting != nil)
+                if importer.access[.calendars] == .denied || importer.access[.calendars] == .restricted {
+                    Button("打开 App 权限设置") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                }
+                if let message = importer.message { Text(message).foregroundStyle(.secondary) }
+                if importer.allowed(.calendars), importer.enabled.contains(.calendars) {
+                    Text("回到「导入与同步」，可以选择要显示的日历。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Section("迁移小米云中的日程") {
+                Text("小米账户日历暂时无法直接连接。已有 .ics 文件时，可以导入本 App。")
+                NavigationLink("导入 .ics 文件") { CalendarTransferSheet(kind: .calendar) }
+                Link("打开小米云服务", destination: URL(string: "https://i.mi.com/")!)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background { CalendarTheme.background }
+        .navigationTitle("小米手机日历")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

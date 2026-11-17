@@ -23,11 +23,17 @@ permissions:
 jobs:
   ipa:
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Check calendar dates, reminders and file import
+        run: |
+          xcrun swiftc -parse-as-library ios/CalendarApp/CalendarCore.swift \
+            ios/CalendarApp/HolidaySchedule.swift ios/CalendarApp/CalendarArchive.swift \
+            ios/CalendarApp/CalendarICS.swift ios/Tests/CalendarDataChecks.swift -o "$RUNNER_TEMP/calendar-data-checks"
+          "$RUNNER_TEMP/calendar-data-checks"
       - name: Verify Xcode and package the arm64 app
         run: |
           xcodebuild -version
@@ -49,9 +55,10 @@ jobs:
                 select(.name == "iPhone 18 Pro Max") | .udid] | first // empty')"
           fi
           test -n "$device"
+          echo "CALENDAR_SIMULATOR=$device" >> "$GITHUB_ENV"
           xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
             -configuration Debug -destination "id=$device" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
-            CODE_SIGNING_ALLOWED=NO build
+            -only-testing:CalendarUITests CODE_SIGNING_ALLOWED=NO build-for-testing
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" "$RUNNER_TEMP/calendar-sim/Build/Products/Debug-iphonesimulator/PersonalCalendar.app"
           installed="$(xcrun simctl get_app_container "$device" app.personalglass.calendar app)"
@@ -72,3 +79,9 @@ jobs:
             ios/build-output/iPhone-18-Pro-Max.png
             ios/build-output/iPhone-18-Pro-Max-Import.png
           if-no-files-found: error
+      - name: Test calendar swipe gestures
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
+            -configuration Debug -destination "id=$CALENDAR_SIMULATOR" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
+            -parallel-testing-enabled NO -only-testing:CalendarUITests CODE_SIGNING_ALLOWED=NO test-without-building
