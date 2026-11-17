@@ -291,7 +291,7 @@ struct WeekGrid: View {
                     timeline(days: days, columns: columns)
                 }
                 .frame(height: 305)
-                .accessibilityIdentifier("calendar-week-timeline")
+                .accessibilityIdentifier("calendar-week-timeline-\(start.key)")
                 .defaultScrollAnchor(.top)
                 .onAppear {
                     proxy.scrollTo(Self.initialHour(columns), anchor: .top)
