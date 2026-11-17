@@ -5,18 +5,21 @@ struct CalendarPager: View {
     let mode: CalendarMode
     @Binding var selection: CivilDay
     let today: CivilDay
+    @Binding var previewMonthPage: Int?
     let showMonth: (CivilDay) -> Void
     let openItem: (CalendarItem) -> Void
 
     @State private var position: ScrollPosition
     @State private var displayedPage: Int
+    @State private var followsSwipe = false
     @State private var heights: [Int: CGFloat] = [:]
 
-    init(mode: CalendarMode, selection: Binding<CivilDay>, today: CivilDay,
+    init(mode: CalendarMode, selection: Binding<CivilDay>, today: CivilDay, previewMonthPage: Binding<Int?>,
          showMonth: @escaping (CivilDay) -> Void, openItem: @escaping (CalendarItem) -> Void) {
         self.mode = mode
         self._selection = selection
         self.today = today
+        self._previewMonthPage = previewMonthPage
         self.showMonth = showMonth
         self.openItem = openItem
         let initial = mode.page(containing: selection.wrappedValue)
@@ -48,13 +51,21 @@ struct CalendarPager: View {
         .scrollIndicators(.hidden)
         .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
         .scrollPosition($position, anchor: .center)
+        .onScrollGeometryChange(for: Int?.self) { geometry in
+            mode == .month ? centeredPage(in: geometry) : nil
+        } action: { _, page in
+            if followsSwipe { previewMonthPage = page }
+        }
         .onScrollPhaseChange { previous, phase, context in
-            guard phase == .idle,
-                  position.isPositionedByUser || previous == .interacting || previous == .decelerating else { return }
-            let width = context.geometry.containerSize.width
-            guard width > 0 else { return }
-            let reachedPage = Int(floor(context.geometry.visibleRect.midX / width))
-            guard (0..<mode.pageCount).contains(reachedPage) else { return }
+            if mode == .month, phase == .interacting {
+                followsSwipe = true
+                previewMonthPage = centeredPage(in: context.geometry)
+            }
+            guard phase == .idle else { return }
+            let wasSwiping = followsSwipe || position.isPositionedByUser || previous == .interacting || previous == .decelerating
+            followsSwipe = false
+            defer { if mode == .month { previewMonthPage = nil } }
+            guard wasSwiping, let reachedPage = centeredPage(in: context.geometry) else { return }
             displayedPage = reachedPage
             if reachedPage != mode.page(containing: selection) {
                 selection = mode.day(on: reachedPage, matching: selection)
@@ -62,6 +73,8 @@ struct CalendarPager: View {
         }
         .onChange(of: mode.page(containing: selection)) { _, target in
             guard target != displayedPage else { return }
+            followsSwipe = false
+            if mode == .month { previewMonthPage = nil }
             let animate = !reduceMotion && abs(target - displayedPage) == 1
             displayedPage = target
             withAnimation(animate ? .smooth(duration: 0.28) : nil) {
@@ -70,6 +83,13 @@ struct CalendarPager: View {
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: height)
         .accessibilityIdentifier("calendar-pager")
+    }
+
+    private func centeredPage(in geometry: ScrollGeometry) -> Int? {
+        let width = geometry.containerSize.width
+        guard width > 0 else { return nil }
+        let page = Int(floor(geometry.visibleRect.midX / width))
+        return (0..<mode.pageCount).contains(page) ? page : nil
     }
 
     @ViewBuilder private func content(on page: Int) -> some View {

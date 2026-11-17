@@ -103,6 +103,7 @@ struct CalendarHome: View {
     @State private var today = CivilDay.today
     @State private var selection = CalendarHome.initialSelection
     @State private var mode = CalendarMode.month
+    @State private var previewMonthPage: Int?
     @State private var sheet: CalendarSheet?
 
     private static var initialSelection: CivilDay {
@@ -114,8 +115,14 @@ struct CalendarHome: View {
         return .today
     }
 
+    private var periodPage: Int {
+        if mode == .month, let previewMonthPage { return previewMonthPage }
+        return mode.page(containing: selection)
+    }
+
     private var periodTitle: String {
-        mode == .year ? "\(selection.year)年" : "\(selection.year)年\(selection.month)月"
+        let day = mode == .month && previewMonthPage != nil ? mode.day(on: periodPage, matching: selection) : selection
+        return mode == .year ? "\(day.year)年" : "\(day.year)年\(day.month)月"
     }
 
     var body: some View {
@@ -128,7 +135,8 @@ struct CalendarHome: View {
 
                 ScrollView {
                     VStack(spacing: 8) {
-                        CalendarPager(mode: mode, selection: $selection, today: today, showMonth: showMonth) {
+                        CalendarPager(mode: mode, selection: $selection, today: today,
+                                      previewMonthPage: $previewMonthPage, showMonth: showMonth) {
                             sheet = .item($0)
                         }
                         .id(mode)
@@ -153,6 +161,7 @@ struct CalendarHome: View {
             }
             .foregroundStyle(CalendarTheme.ink)
         }
+        .onChange(of: mode) { _, _ in previewMonthPage = nil }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
                 updateClock()
@@ -224,8 +233,8 @@ struct CalendarHome: View {
                             .monospacedDigit()
                             .lineLimit(1)
                             .minimumScaleFactor(0.65)
-                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(mode.page(containing: selection))))
-                            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: mode.page(containing: selection))
+                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(periodPage)))
+                            .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: periodPage)
                         Image(systemName: "chevron.down")
                             .font(.caption2.bold())
                     }

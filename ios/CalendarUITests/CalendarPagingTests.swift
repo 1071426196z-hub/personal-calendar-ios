@@ -17,6 +17,7 @@ final class CalendarPagingTests: XCTestCase {
         XCTAssertTrue(pager.waitForExistence(timeout: 5))
         pager.swipeRight()
         waitFor(period, key: "value", toEqual: "2026年10月")
+        waitFor(selectedDate, key: "label", toEqual: "10月17日")
         app.buttons["下一月"].tap()
         waitFor(period, key: "value", toEqual: "2026年11月")
 
