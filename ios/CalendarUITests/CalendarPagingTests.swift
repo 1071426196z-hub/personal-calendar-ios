@@ -35,7 +35,7 @@ final class CalendarPagingTests: XCTestCase {
         waitFor(period, key: "value", toEqual: "2026年")
         pager.swipeLeft()
         waitFor(period, key: "value", toEqual: "2027年")
-        app.buttons["2027年3月"].tap()
+        app.buttons["calendar-year-month-2027-3"].tap()
         waitFor(period, key: "value", toEqual: "2027年3月")
     }
 

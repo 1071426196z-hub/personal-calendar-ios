@@ -205,7 +205,8 @@ struct YearGrid: View {
                     miniMonth(month)
                 }
                 .buttonStyle(CalendarDateButtonStyle())
-                .accessibilityLabel("\(selection.year)年\(month)月")
+                .accessibilityLabel(Text(verbatim: "\(selection.year)年\(month)月"))
+                .accessibilityIdentifier("calendar-year-month-\(selection.year)-\(month)")
                 .accessibilityAddTraits(month == selection.month ? .isSelected : [])
             }
         }
