@@ -49,6 +49,7 @@ jobs:
                 select(.name == "iPhone 18 Pro Max") | .udid] | first // empty')"
           fi
           test -n "$device"
+          echo "CALENDAR_SIMULATOR=$device" >> "$GITHUB_ENV"
           xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
             -configuration Debug -destination "id=$device" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
             CODE_SIGNING_ALLOWED=NO build
@@ -63,9 +64,6 @@ jobs:
           xcrun simctl launch --terminate-running-process "$device" app.personalglass.calendar --verify-import-screen
           sleep 2
           xcrun simctl io "$device" screenshot ios/build-output/iPhone-18-Pro-Max-Import.png
-          xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
-            -configuration Debug -destination "id=$device" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
-            -parallel-testing-enabled NO -only-testing:CalendarUITests CODE_SIGNING_ALLOWED=NO test
       - name: Upload simulator screenshot and checksum
         uses: actions/upload-artifact@v7
         with:
@@ -75,3 +73,9 @@ jobs:
             ios/build-output/iPhone-18-Pro-Max.png
             ios/build-output/iPhone-18-Pro-Max-Import.png
           if-no-files-found: error
+      - name: Test calendar swipe gestures
+        timeout-minutes: 4
+        run: |
+          xcodebuild -project ios/PersonalCalendar.xcodeproj -scheme PersonalCalendar \
+            -configuration Debug -destination "id=$CALENDAR_SIMULATOR" -derivedDataPath "$RUNNER_TEMP/calendar-sim" \
+            -parallel-testing-enabled NO -only-testing:CalendarUITests CODE_SIGNING_ALLOWED=NO test
