@@ -181,8 +181,13 @@ struct CalendarEditor: View {
         Group {
             Toggle("全天", isOn: $allDay)
             datePicker("开始日期", value: $date)
-                .onChange(of: date) { _, updated in
-                    if endDate < updated { endDate = updated }
+                .onChange(of: date) { previous, updated in
+                    if action == .reschedule {
+                        let delta = CivilDay(previous).distance(to: CivilDay(updated))
+                        endDate = min(CivilDay(endDate).adding(delta), CivilDay.last).date
+                    } else if endDate < updated {
+                        endDate = updated
+                    }
                 }
             if !allDay { DatePicker("开始时间", selection: $start, displayedComponents: .hourAndMinute) }
             datePicker("结束日期", value: $endDate, lowerBound: CivilDay(date))

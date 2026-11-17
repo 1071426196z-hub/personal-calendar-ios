@@ -137,7 +137,8 @@ final class CalendarNotifications {
                              trigger: UNCalendarNotificationTrigger) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = item.title
-        content.body = [item.displayKind, day?.label, reminder.title].compactMap { $0 }.joined(separator: " · ")
+        content.body = [item.displayKind, day?.label, item.isTimed ? item.start : nil, reminder.title]
+            .compactMap { $0 }.joined(separator: " · ")
         content.sound = .default
         content.threadIdentifier = "calendar-" + item.kind.rawValue
         content.userInfo = ["calendarItem": item.id]
