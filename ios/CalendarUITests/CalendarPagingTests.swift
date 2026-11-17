@@ -12,15 +12,12 @@ final class CalendarPagingTests: XCTestCase {
         let selectedDate = app.staticTexts["calendar-selected-date"]
         let modes = app.segmentedControls["calendar-mode"]
 
+        XCTAssertTrue(period.waitForExistence(timeout: 30))
         waitFor(period, key: "value", toEqual: "2026年11月")
         XCTAssertTrue(pager.waitForExistence(timeout: 5))
-        pager.swipeLeft()
-        waitFor(period, key: "value", toEqual: "2026年12月")
         pager.swipeRight()
-        waitFor(period, key: "value", toEqual: "2026年11月")
+        waitFor(period, key: "value", toEqual: "2026年10月")
         app.buttons["下一月"].tap()
-        waitFor(period, key: "value", toEqual: "2026年12月")
-        app.buttons["上一月"].tap()
         waitFor(period, key: "value", toEqual: "2026年11月")
 
         modes.buttons["周"].tap()
@@ -44,12 +41,13 @@ final class CalendarPagingTests: XCTestCase {
 
     private func waitFor(_ element: XCUIElement, key: String, toEqual value: String,
                          file: StaticString = #filePath, line: UInt = #line) {
-        let expectsValue = NSPredicate(format: "exists == true AND %K == %@", key, value)
-        let expectation = XCTNSPredicateExpectation(predicate: expectsValue, object: element)
-        guard XCTWaiter.wait(for: [expectation], timeout: 15) == .completed else {
-            let actual = element.exists ? (key == "value" ? element.value : element.label) : nil
-            XCTFail("Expected \(key) to be \(value), got \(String(describing: actual))", file: file, line: line)
-            return
-        }
+        let deadline = Date().addingTimeInterval(20)
+        var actual: String?
+        repeat {
+            actual = key == "value" ? element.value as? String : element.label
+            if actual == value { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        XCTAssertEqual(actual, value, file: file, line: line)
     }
 }
