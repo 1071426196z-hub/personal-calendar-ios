@@ -1,4 +1,7 @@
+import Combine
 import SwiftUI
+import UIKit
+import WidgetKit
 
 @main
 struct PersonalCalendarApp: App {
@@ -150,10 +153,21 @@ struct CalendarHome: View {
             }
             .foregroundStyle(CalendarTheme.ink)
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
-                today = .today
+                updateClock()
                 syncSystemItems()
+            }
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                let schedule = await HolidayFeed.shared.refresh()
+                guard !Task.isCancelled else { return }
+                if store.setHolidays(schedule) {
+                    WidgetCenter.shared.reloadTimelines(ofKind: "PersonalCalendar.TodayAndMonth")
+                }
+                try? await Task.sleep(for: .seconds(3_600))
             }
         }
         .task(id: selection.monthStart) {
@@ -183,8 +197,10 @@ struct CalendarHome: View {
                 break
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
-            today = .today
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange))
+            .merge(with: NotificationCenter.default.publisher(for: .NSCalendarDayChanged))) { _ in
+            if updateClock(), scenePhase == .active { syncSystemItems() }
         }
         .sheet(item: $sheet) { target in
             switch target {
@@ -256,7 +272,7 @@ struct CalendarHome: View {
     }
 
     private var selectedDay: some View {
-        let facts = store.engine.facts(selection)
+        let facts = store.facts(selection)
         let distance = today.distance(to: selection)
         let message = distance == 0 ? "今天" : (distance > 0 ? "距今天还有 \(distance) 天" : "\(-distance) 天前")
         return VStack(alignment: .leading, spacing: 11) {
@@ -359,6 +375,17 @@ struct CalendarHome: View {
 
     private func syncSystemItems() {
         Task { await importer.refresh(around: selection, store: store) }
+    }
+
+    @discardableResult
+    private func updateClock() -> Bool {
+        let zone = TimeZone(identifier: TimeZone.autoupdatingCurrent.identifier) ?? .current
+        let newToday = CivilDay.localDay(containing: .now, in: zone)
+        if selection == today { selection = newToday }
+        today = newToday
+        let changed = store.setTimeZone(zone)
+        if changed { WidgetCenter.shared.reloadAllTimelines() }
+        return changed
     }
 
     private func navigate(_ direction: Int) {

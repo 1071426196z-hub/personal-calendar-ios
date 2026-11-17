@@ -14,12 +14,15 @@ private struct CalendarWidgetEntry: TimelineEntry {
     let lunar: String
     let label: String
 
-    init(date: Date, engine: CalendarEngine? = nil) {
+    init(date: Date, engine: CalendarEngine? = nil, holidays: HolidaySchedule = HolidaySchedule()) {
         self.date = date
         day = CivilDay.localDay(containing: date)
-        let facts = day.supported ? engine?.facts(day) : nil
+        let facts = day.supported ? engine?.facts(day)?.withHolidaySchedule(holidays, on: day) : nil
         lunar = facts?.lunarText ?? ""
-        label = facts.flatMap { $0.festival.isEmpty ? $0.term : $0.festival } ?? ""
+        label = facts.map { facts in
+            [facts.festival.isEmpty ? (facts.term ?? "") : facts.festival, facts.shiftText]
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+        } ?? ""
     }
 }
 
@@ -27,19 +30,22 @@ private struct CalendarWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> CalendarWidgetEntry { CalendarWidgetEntry(date: .now) }
 
     func getSnapshot(in context: Context, completion: @escaping (CalendarWidgetEntry) -> Void) {
-        completion(CalendarWidgetEntry(date: .now, engine: CalendarEngine()))
+        completion(CalendarWidgetEntry(date: .now, engine: CalendarEngine(), holidays: HolidayFeed.saved()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<CalendarWidgetEntry>) -> Void) {
-        let engine = CalendarEngine()
-        let entries = widgetDates().map { CalendarWidgetEntry(date: $0, engine: engine) }
-        completion(Timeline(entries: entries, policy: .atEnd))
+        Task {
+            let holidays = await HolidayFeed.shared.refresh()
+            let engine = CalendarEngine()
+            let entries = widgetDates().prefix(2).map { CalendarWidgetEntry(date: $0, engine: engine, holidays: holidays) }
+            completion(Timeline(entries: entries, policy: .atEnd))
+        }
     }
 }
 
 private func widgetDates() -> [Date] {
     let now = Date()
-    let calendar = Calendar(identifier: .gregorian)
+    let calendar = CivilDay.localCalendar()
     let midnight = calendar.startOfDay(for: now)
     return [now] + (1...7).compactMap { calendar.date(byAdding: .day, value: $0, to: midnight) }
 }

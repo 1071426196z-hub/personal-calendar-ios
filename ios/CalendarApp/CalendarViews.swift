@@ -178,7 +178,7 @@ struct MonthGrid: View {
                     let itemKinds = Set(store.items(on: day).map(\.kind))
                     Button { select(day) } label: {
                         CalendarDayCell(day: day, selected: day == selection, isToday: day == today,
-                                        muted: day.month != selection.month, facts: store.engine.facts(day),
+                                        muted: day.month != selection.month, facts: store.facts(day),
                                         kinds: EventKind.allCases.filter { itemKinds.contains($0) })
                     }
                     .disabled(!day.supported)
@@ -291,7 +291,7 @@ struct WeekGrid: View {
                         Text(CivilDay.weekdays[day.weekday]).font(.caption2).foregroundStyle(.secondary)
                         Button { select(day) } label: {
                             CalendarDayCell(day: day, selected: selection == day, isToday: today == day,
-                                            muted: false, facts: store.engine.facts(day), kinds: [])
+                                            muted: false, facts: store.facts(day), kinds: [])
                         }
                         .buttonStyle(CalendarDateButtonStyle())
                         .disabled(!day.supported)

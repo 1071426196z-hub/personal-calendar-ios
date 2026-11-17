@@ -133,9 +133,33 @@
 
   const fixedFestivals = {
     "01-01": "元旦", "02-14": "情人节", "03-08": "妇女节", "03-12": "植树节",
-    "05-01": "劳动节", "05-04": "青年节", "06-01": "儿童节", "09-10": "教师节",
-    "10-01": "国庆节", "12-24": "平安夜", "12-25": "圣诞节",
+    "04-01": "愚人节", "05-01": "劳动节", "05-04": "青年节", "06-01": "儿童节", "09-10": "教师节",
+    "10-01": "国庆节", "10-31": "万圣节", "12-24": "平安夜", "12-25": "圣诞节", "12-31": "跨年夜",
   };
+
+  function weekdayFestival(key) {
+    const [year, month, day] = parts(key);
+    const dayOfWeek = weekday(key);
+    if ((month === 3 || month === 4) && dayOfWeek === 0 && key === westernEaster(year)) return "复活节";
+    if (month === 5 && dayOfWeek === 0 && day >= 8 && day <= 14) return "母亲节";
+    if (month === 6 && dayOfWeek === 0 && day >= 15 && day <= 21) return "父亲节";
+    if (month === 11 && dayOfWeek === 4 && day >= 22 && day <= 28) return "感恩节";
+    return "";
+  }
+
+  function westernEaster(year) {
+    // Oudin's Gregorian Easter algorithm, as published by the U.S. Naval Observatory.
+    const div = (value, divisor) => Math.trunc(value / divisor);
+    const century = div(year, 100);
+    const cycle = year % 19;
+    const correction = div(century - 17, 25);
+    let moon = (century - div(century, 4) - div(century - correction, 3) + 19 * cycle + 15) % 30;
+    moon -= div(moon, 28) * (1 - div(moon, 28) * div(29, moon + 1) * div(21 - cycle, 11));
+    const weekdayCorrection = (year + div(year, 4) + moon + 2 - century + div(century, 4)) % 7;
+    const offset = moon - weekdayCorrection;
+    const month = 3 + div(offset + 40, 44);
+    return make(year, month, offset + 28 - 31 * div(month, 4));
+  }
   const lunarFestivals = {
     "1-1": "春节", "1-15": "元宵节", "2-2": "龙抬头", "5-5": "端午节",
     "7-7": "七夕", "7-15": "中元节", "8-15": "中秋节", "9-9": "重阳节", "12-8": "腊八节",
@@ -170,13 +194,18 @@
     const tomorrow = moon.month === 12 && moon.day >= 29 ? lunar(add(key, 1)) : null;
     const newYearEve = tomorrow?.month === 1 && !tomorrow.leap && tomorrow.day === 1;
     const traditional = !moon.leap && lunarFestivals[moon.month + "-" + moon.day];
-    const festival = (newYearEve && "除夕") || traditional || fixedFestivals[key.slice(5)] ||
-      (term === "清明" ? "清明节" : "");
+    const festivals = new Set([
+      newYearEve ? "除夕" : "", traditional || "", fixedFestivals[key.slice(5)] || "",
+      term === "清明" ? "清明节" : "", weekdayFestival(key),
+    ]);
+    festivals.delete("");
+    const [mainFestival] = festivals;
+    const festival = [...festivals].join(" · ");
     const rest = restRanges.find(([from, to]) => key >= from && key <= to);
     return {
       moon, term, festival, shift: workdays.has(key) ? "班" : rest ? "休" : "",
       shiftText: workdays.has(key) ? "调休上班" : rest ? rest[2] + "放假" : "",
-      shortLabel: festival || term || (moon.day === 1 ? (moon.leap ? "闰" : "") + lunarMonths[moon.month - 1] : lunarDays[moon.day - 1]),
+      shortLabel: mainFestival || term || (moon.day === 1 ? (moon.leap ? "闰" : "") + lunarMonths[moon.month - 1] : lunarDays[moon.day - 1]),
     };
   }
 

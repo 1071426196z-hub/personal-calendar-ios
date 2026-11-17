@@ -28,6 +28,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Check calendar time zones and holiday decoding
+        run: |
+          xcrun swiftc -parse-as-library ios/CalendarApp/CalendarCore.swift \
+            ios/CalendarApp/HolidaySchedule.swift ios/Tests/CalendarDataChecks.swift -o "$RUNNER_TEMP/calendar-data-checks"
+          "$RUNNER_TEMP/calendar-data-checks"
       - name: Verify Xcode and package the arm64 app
         run: |
           xcodebuild -version
