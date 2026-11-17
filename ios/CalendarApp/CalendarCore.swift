@@ -12,9 +12,24 @@ struct CivilDay: Hashable, Comparable, Identifiable {
     static let last = CivilDay(2100, 12, 31)
     static var today: Self { localDay(containing: Date()) }
 
+    static func localCalendar(in timeZone: TimeZone = .autoupdatingCurrent) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
     static func localDay(containing instant: Date) -> Self {
-        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: instant)
+        localDay(containing: instant, in: .autoupdatingCurrent)
+    }
+
+    static func localDay(containing instant: Date, in timeZone: TimeZone) -> Self {
+        let parts = localCalendar(in: timeZone).dateComponents([.year, .month, .day], from: instant)
         return Self(parts.year!, parts.month!, parts.day!)
+    }
+
+    static func timeKey(_ instant: Date, in calendar: Calendar) -> String {
+        let time = calendar.dateComponents([.hour, .minute], from: instant)
+        return String(format: "%02d:%02d", time.hour ?? 0, time.minute ?? 0)
     }
 
     let date: Date
@@ -45,6 +60,16 @@ struct CivilDay: Hashable, Comparable, Identifiable {
 
     func adding(_ days: Int) -> Self {
         Self(Self.calendar.date(byAdding: .day, value: days, to: date)!)
+    }
+
+    func instant(at time: String, in timeZone: TimeZone) -> Date? {
+        let calendar = Self.localCalendar(in: timeZone)
+        let values = time.split(separator: ":").compactMap { Int($0) }
+        guard values.count == 2, (0...23).contains(values[0]), (0...59).contains(values[1]) else { return nil }
+        let requested = DateComponents(year: year, month: month, day: day, hour: values[0], minute: values[1])
+        guard let result = calendar.date(from: requested),
+              calendar.date(result, matchesComponents: requested) else { return nil }
+        return result
     }
     func movingMonths(_ offset: Int) -> Self {
         let target = Self(Self.calendar.date(byAdding: .month, value: offset, to: monthStart.date)!)
@@ -127,10 +152,12 @@ struct CalendarItem: Codable, Identifiable {
     var linkedSource: String? = nil
     var reminderTime: String? = nil
     var isSystemReminder: Bool? = nil
+    var startInstant: Date? = nil
+    var endInstant: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, title, date, endDate, start, end, allDay, annual, lunar, note, sample
-        case linkedSource, reminderTime, isSystemReminder
+        case linkedSource, reminderTime, isSystemReminder, startInstant, endInstant
         case repeatRule = "repeat"
     }
 
@@ -138,6 +165,17 @@ struct CalendarItem: Codable, Identifiable {
     var icon: String { isSystemReminder == true ? "bell" : kind.icon }
     var displayKind: String { isSystemReminder == true ? "提醒事项" : kind.label }
     var isLinked: Bool { linkedSource != nil }
+
+    func localized(in timeZone: TimeZone) -> Self {
+        guard let startInstant, let endInstant, isTimed, repeatRule == RepeatRule.none else { return self }
+        let calendar = CivilDay.localCalendar(in: timeZone)
+        var item = self
+        item.date = CivilDay.localDay(containing: startInstant, in: timeZone).key
+        item.endDate = CivilDay.localDay(containing: endInstant, in: timeZone).key
+        item.start = CivilDay.timeKey(startInstant, in: calendar)
+        item.end = CivilDay.timeKey(endInstant, in: calendar)
+        return item
+    }
     var timeLabel: String {
         if isSystemReminder == true { return reminderTime ?? "当天到期" }
         guard kind == .event else { return "" }
@@ -176,6 +214,15 @@ struct DayFacts: Decodable {
     let shift: String
     let shiftText: String
     let shortLabel: String
+
+    func withHolidaySchedule(_ schedule: HolidaySchedule, on day: CivilDay) -> Self {
+        let updated = schedule.day(on: day)
+        guard updated != nil || schedule.includes(day.year) else { return self }
+        let shift = updated.map { $0.isOff ? "休" : "班" } ?? ""
+        let shiftText = updated.map { $0.isOff ? $0.name + "放假" : "调休上班" } ?? ""
+        return Self(moon: moon, lunarText: lunarText, term: term, festival: festival,
+                    shift: shift, shiftText: shiftText, shortLabel: shortLabel)
+    }
 }
 
 struct AlmanacData: Decodable {
@@ -278,12 +325,15 @@ final class CalendarEngine {
 final class CalendarStore: ObservableObject {
     @Published private(set) var items: [CalendarItem]
     @Published private(set) var linkedItems: [CalendarItem] = []
-    var allItems: [CalendarItem] { items + linkedItems }
+    @Published private(set) var timeZone = TimeZone.current
+    @Published private(set) var holidays = HolidayFeed.saved()
+    var allItems: [CalendarItem] { localItems + linkedItems }
     let engine = CalendarEngine()
     private let defaults: UserDefaults
     private let storageKey = "personal-calendar-items-v1"
     private var recordJSON = "[]"
     private var occurrenceCache: [CivilDay: [CalendarItem]] = [:]
+    private var localItems: [CalendarItem] = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -308,7 +358,26 @@ final class CalendarStore: ObservableObject {
                              sample: true)
             ]
         }
-        recordJSON = CalendarEngine.encode(items) ?? "[]"
+        rebuildOccurrences()
+    }
+
+    func facts(_ day: CivilDay) -> DayFacts? {
+        engine.facts(day)?.withHolidaySchedule(holidays, on: day)
+    }
+
+    @discardableResult
+    func setTimeZone(_ updated: TimeZone) -> Bool {
+        guard updated.identifier != timeZone.identifier else { return false }
+        timeZone = updated
+        rebuildOccurrences()
+        return true
+    }
+
+    @discardableResult
+    func setHolidays(_ updated: HolidaySchedule) -> Bool {
+        guard updated != holidays else { return false }
+        holidays = updated
+        return true
     }
 
     func items(on day: CivilDay) -> [CalendarItem] {
@@ -338,16 +407,20 @@ final class CalendarStore: ObservableObject {
     }
 
     func setLinkedItems(_ incoming: [CalendarItem]) {
-        recordJSON = CalendarEngine.encode(items + incoming) ?? "[]"
-        occurrenceCache.removeAll(keepingCapacity: true)
         linkedItems = incoming
+        rebuildOccurrences()
     }
 
     private func persist(_ updated: [CalendarItem]) {
         guard let encoded = CalendarEngine.encode(updated) else { return }
         defaults.set(Data(encoded.utf8), forKey: storageKey)
-        recordJSON = CalendarEngine.encode(updated + linkedItems) ?? encoded
-        occurrenceCache.removeAll(keepingCapacity: true)
         items = updated
+        rebuildOccurrences()
+    }
+
+    private func rebuildOccurrences() {
+        localItems = items.map { $0.localized(in: timeZone) }
+        recordJSON = CalendarEngine.encode(allItems) ?? "[]"
+        occurrenceCache.removeAll(keepingCapacity: true)
     }
 }

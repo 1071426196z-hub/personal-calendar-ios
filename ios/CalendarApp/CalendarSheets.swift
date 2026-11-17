@@ -123,7 +123,7 @@ struct CalendarEditor: View {
             }
         }
         .onAppear {
-            if let facts = store.engine.facts(original.flatMap { CivilDay($0.date) } ?? selection) {
+            if let facts = store.facts(original.flatMap { CivilDay($0.date) } ?? selection) {
                 if original?.lunar == nil { lunar = facts.moon }
                 let monthStartsInPreviousYear = CivilDay(date).month <= 2 && facts.moon.month >= 11
                 year = CivilDay(date).year - (monthStartsInPreviousYear ? 1 : 0)
@@ -193,8 +193,7 @@ struct CalendarEditor: View {
     }
 
     private static func timeKey(_ value: Date) -> String {
-        let parts = CivilDay.calendar.dateComponents([.hour, .minute], from: value)
-        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+        CivilDay.timeKey(value, in: CivilDay.calendar)
     }
 
     private func save() {
@@ -217,6 +216,18 @@ struct CalendarEditor: View {
             item.start = allDay ? nil : startTime
             item.end = allDay ? nil : endTime
             item.repeatRule = repeatRule
+            if !allDay, repeatRule == .none {
+                let sameStart = original?.date == from.key && original?.start == startTime
+                let sameEnd = original?.endDate == to.key && original?.end == endTime
+                guard let first = (sameStart ? original?.startInstant : nil) ?? from.instant(at: startTime, in: store.timeZone),
+                      let last = (sameEnd ? original?.endInstant : nil) ?? to.instant(at: endTime, in: store.timeZone),
+                      last > first else {
+                    error = "请选一个在当前时区有效的开始和结束时间。"
+                    return
+                }
+                item.startInstant = first
+                item.endInstant = last
+            }
         case .birthday:
             let existing = kind == original?.kind && lunar == original?.lunar ? original.flatMap { CivilDay($0.date) } : nil
             guard let next = existing ?? lunarPreview(showYear: false), next.supported else {
