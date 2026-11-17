@@ -1,6 +1,107 @@
 import SwiftUI
 
+struct CalendarPager: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let mode: CalendarMode
+    @Binding var selection: CivilDay
+    let today: CivilDay
+    let showMonth: (CivilDay) -> Void
+    let openItem: (CalendarItem) -> Void
+
+    @State private var position: ScrollPosition
+    @State private var displayedPage: Int
+    @State private var heights: [Int: CGFloat] = [:]
+
+    init(mode: CalendarMode, selection: Binding<CivilDay>, today: CivilDay,
+         showMonth: @escaping (CivilDay) -> Void, openItem: @escaping (CalendarItem) -> Void) {
+        self.mode = mode
+        self._selection = selection
+        self.today = today
+        self.showMonth = showMonth
+        self.openItem = openItem
+        let initial = mode.page(containing: selection.wrappedValue)
+        var startingPosition = ScrollPosition(idType: Int.self)
+        startingPosition.scrollTo(id: initial, anchor: .center)
+        _position = State(initialValue: startingPosition)
+        _displayedPage = State(initialValue: initial)
+    }
+
+    var body: some View {
+        let height = heights[displayedPage] ?? mode.estimatedHeight
+        ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: 0) {
+                ForEach(0..<mode.pageCount, id: \.self) { page in
+                    content(on: page)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .containerRelativeFrame(.horizontal)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured in
+                            if measured > 0 { heights[page] = measured }
+                        }
+                        .accessibilityHidden(page != displayedPage)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .frame(height: height)
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+        .scrollPosition($position, anchor: .center)
+        .onScrollPhaseChange { previous, phase, context in
+            guard phase == .idle,
+                  position.isPositionedByUser || previous == .interacting || previous == .decelerating else { return }
+            let width = context.geometry.containerSize.width
+            guard width > 0 else { return }
+            let reachedPage = Int(floor(context.geometry.visibleRect.midX / width))
+            guard (0..<mode.pageCount).contains(reachedPage) else { return }
+            displayedPage = reachedPage
+            if reachedPage != mode.page(containing: selection) {
+                selection = mode.day(on: reachedPage, matching: selection)
+            }
+        }
+        .onChange(of: mode.page(containing: selection)) { _, target in
+            guard target != displayedPage else { return }
+            let animate = !reduceMotion && abs(target - displayedPage) == 1
+            displayedPage = target
+            withAnimation(animate ? .smooth(duration: 0.28) : nil) {
+                position.scrollTo(id: target, anchor: .center)
+            }
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: height)
+        .accessibilityIdentifier("calendar-pager")
+    }
+
+    @ViewBuilder private func content(on page: Int) -> some View {
+        let day = mode.day(on: page, matching: selection)
+        switch mode {
+        case .month:
+            MonthGrid(selection: day, today: today, select: select)
+        case .week:
+            WeekGrid(selection: day, today: today, select: select, open: openItem)
+        case .year:
+            YearGrid(selection: day, today: today) { month in
+                showMonth(day.movingMonths(month - day.month))
+            }
+        }
+    }
+
+    private func select(_ day: CivilDay) { selection = day }
+}
+
+private struct CalendarDateButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.76 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
 private struct CalendarDayCell: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let day: CivilDay
     let selected: Bool
     let isToday: Bool
@@ -15,7 +116,13 @@ private struct CalendarDayCell: View {
                 .monospacedDigit()
                 .foregroundStyle(selected ? Color.white : isToday ? CalendarTheme.accent : CalendarTheme.ink.opacity(muted ? 0.34 : 1))
                 .frame(width: 30, height: 30)
-                .background(selected ? (isToday ? CalendarTheme.accent : CalendarTheme.ink) : .clear, in: Circle())
+                .background {
+                    Circle()
+                        .fill(isToday ? CalendarTheme.accent : CalendarTheme.ink)
+                        .scaleEffect(selected || reduceMotion ? 1 : 0.62)
+                        .opacity(selected ? 1 : 0)
+                }
+                .animation(reduceMotion ? nil : .snappy(duration: 0.23, extraBounce: 0.04), value: selected)
                 .overlay(alignment: .topTrailing) {
                     if let shift = facts?.shift, !shift.isEmpty {
                         Text(shift)
@@ -49,13 +156,13 @@ private struct CalendarDayCell: View {
 
 struct MonthGrid: View {
     @EnvironmentObject private var store: CalendarStore
-    @Binding var selection: CivilDay
+    let selection: CivilDay
     let today: CivilDay
+    let select: (CivilDay) -> Void
     private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 1), count: 7)
 
     var body: some View {
         let first = selection.monthStart
-        let count = ((first.weekday + selection.daysInMonth + 6) / 7) * 7
         VStack(spacing: 8) {
             HStack(spacing: 1) {
                 ForEach(Array(CivilDay.weekdays.enumerated()), id: \.element) { index, name in
@@ -66,15 +173,16 @@ struct MonthGrid: View {
                 }
             }
             LazyVGrid(columns: columns, spacing: 3) {
-                ForEach(0..<count, id: \.self) { offset in
+                ForEach(0..<42, id: \.self) { offset in
                     let day = first.adding(offset - first.weekday)
-                    Button { selection = day } label: {
+                    let itemKinds = Set(store.items(on: day).map(\.kind))
+                    Button { select(day) } label: {
                         CalendarDayCell(day: day, selected: day == selection, isToday: day == today,
                                         muted: day.month != selection.month, facts: store.engine.facts(day),
-                                        kinds: EventKind.allCases.filter { kind in store.items(on: day).contains { $0.kind == kind } })
+                                        kinds: EventKind.allCases.filter { itemKinds.contains($0) })
                     }
                     .disabled(!day.supported)
-                    .buttonStyle(.plain)
+                    .buttonStyle(CalendarDateButtonStyle())
                 }
             }
         }
@@ -97,7 +205,7 @@ struct YearGrid: View {
                 Button { choose(month) } label: {
                     miniMonth(month)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(CalendarDateButtonStyle())
                 .accessibilityLabel("\(selection.year)年\(month)月")
                 .accessibilityAddTraits(month == selection.month ? .isSelected : [])
             }
@@ -139,8 +247,9 @@ struct YearGrid: View {
 
 struct WeekGrid: View {
     @EnvironmentObject private var store: CalendarStore
-    @Binding var selection: CivilDay
+    let selection: CivilDay
     let today: CivilDay
+    let select: (CivilDay) -> Void
     let open: (CalendarItem) -> Void
     private let hourHeight: CGFloat = 50
     private let gutter: CGFloat = 30
@@ -164,11 +273,11 @@ struct WeekGrid: View {
                 ForEach(days) { day in
                     VStack(spacing: 0) {
                         Text(CivilDay.weekdays[day.weekday]).font(.caption2).foregroundStyle(.secondary)
-                        Button { selection = day } label: {
+                        Button { select(day) } label: {
                             CalendarDayCell(day: day, selected: selection == day, isToday: today == day,
                                             muted: false, facts: store.engine.facts(day), kinds: [])
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CalendarDateButtonStyle())
                         .disabled(!day.supported)
                     }
                     .frame(maxWidth: .infinity)
@@ -182,6 +291,7 @@ struct WeekGrid: View {
                     timeline(days: days, columns: columns)
                 }
                 .frame(height: 305)
+                .accessibilityIdentifier("calendar-week-timeline")
                 .defaultScrollAnchor(.top)
                 .onAppear {
                     proxy.scrollTo(Self.initialHour(columns), anchor: .top)
