@@ -246,7 +246,7 @@ struct CalendarItem: Codable, Equatable, Identifiable {
     }
 }
 
-struct DayFacts: Decodable {
+struct DayFacts: Decodable, Equatable {
     let moon: LunarRule
     let lunarText: String
     let term: String?
@@ -297,11 +297,14 @@ final class CalendarEngine {
     private var dayCache: [CivilDay: DayFacts] = [:]
     private var almanacCache: [CivilDay: AlmanacData] = [:]
 
-    init() {
-        for name in ["lunar-1.7.8", "dates", "NativeBridge"] {
-            guard let url = Bundle.main.url(forResource: name, withExtension: "js"),
-                  let script = try? String(contentsOf: url, encoding: .utf8) else {
-                assertionFailure("Missing calendar resource: \(name)")
+    init(scriptURLs: [URL]? = nil) {
+        let urls = scriptURLs ?? ["lunar-1.7.8", "dates", "NativeBridge"].compactMap {
+            Bundle.main.url(forResource: $0, withExtension: "js")
+        }
+        assert(urls.count == 3, "Missing calendar resources")
+        for url in urls {
+            guard let script = try? String(contentsOf: url, encoding: .utf8) else {
+                assertionFailure("Missing calendar resource: \(url.lastPathComponent)")
                 continue
             }
             context.evaluateScript(script, withSourceURL: url)
@@ -394,21 +397,45 @@ final class CalendarEngine {
     }
 }
 
+struct CalendarCellSnapshot: Identifiable {
+    let day: CivilDay
+    let facts: DayFacts?
+    let kinds: [EventKind]
+    var id: CivilDay { day }
+}
+
+struct CalendarMonthGeometry: Identifiable {
+    let first: CivilDay
+    let offset: Int
+    let count: Int
+    var id: Int { first.month }
+    init(first: CivilDay, weekStart: CalendarWeekStart) {
+        self.first = first
+        offset = weekStart.offset(of: first)
+        count = first.daysInMonth
+    }
+}
+
 final class CalendarStore: ObservableObject {
     @Published private(set) var items: [CalendarItem]
     @Published private(set) var linkedItems: [CalendarItem] = []
     @Published private(set) var timeZone = TimeZone.current
     @Published private(set) var holidays = HolidayFeed.saved()
+    @Published private(set) var presentationRevision = 0
     var allItems: [CalendarItem] { localItems + linkedItems }
-    let engine = CalendarEngine()
+    let engine: CalendarEngine
     private let defaults: UserDefaults
     private let storageKey = "personal-calendar-items-v1"
     private var recordJSON = "[]"
     private var occurrenceCache: [CivilDay: [CalendarItem]] = [:]
     private var localItems: [CalendarItem] = []
+    private var monthCache: [String: [CalendarCellSnapshot]] = [:]
+    private var monthCacheOrder: [String] = []
+    private var yearCache: [String: [CalendarMonthGeometry]] = [:]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, engine: CalendarEngine = CalendarEngine()) {
         self.defaults = defaults
+        self.engine = engine
         if let data = defaults.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode([CalendarItem].self, from: data) {
             items = saved
@@ -437,6 +464,38 @@ final class CalendarStore: ObservableObject {
         engine.facts(day)?.withHolidaySchedule(holidays, on: day)
     }
 
+    func monthCells(containing day: CivilDay, weekStart: CalendarWeekStart) -> [CalendarCellSnapshot] {
+        let first = day.monthStart
+        let key = first.key + "-\(weekStart.rawValue)"
+        if let hit = monthCache[key] { return hit }
+        let gridStart = weekStart.start(of: first)
+        let cells = (0..<42).map { offset in
+            let date = gridStart.adding(offset)
+            let kinds = Set(items(on: date).map(\.kind))
+            return CalendarCellSnapshot(day: date, facts: facts(date), kinds: EventKind.allCases.filter { kinds.contains($0) })
+        }
+        // Keep nearby pages warm without allowing a long browsing session to grow this cache.
+        if monthCacheOrder.count >= 9 { monthCache.removeValue(forKey: monthCacheOrder.removeFirst()) }
+        monthCacheOrder.append(key)
+        monthCache[key] = cells
+        return cells
+    }
+
+    func yearMonths(_ year: Int, weekStart: CalendarWeekStart) -> [CalendarMonthGeometry] {
+        let key = "\(year)-\(weekStart.rawValue)"
+        if let hit = yearCache[key] { return hit }
+        let months = (1...12).map { CalendarMonthGeometry(first: CivilDay(year, $0, 1), weekStart: weekStart) }
+        if yearCache.count >= 8 { yearCache.removeAll(keepingCapacity: true) }
+        yearCache[key] = months
+        return months
+    }
+
+    private func invalidatePresentation() {
+        monthCache.removeAll(keepingCapacity: true)
+        monthCacheOrder.removeAll(keepingCapacity: true)
+        presentationRevision &+= 1
+    }
+
     @discardableResult
     func setTimeZone(_ updated: TimeZone) -> Bool {
         guard updated.identifier != timeZone.identifier else { return false }
@@ -449,6 +508,7 @@ final class CalendarStore: ObservableObject {
     func setHolidays(_ updated: HolidaySchedule) -> Bool {
         guard updated != holidays else { return false }
         holidays = updated
+        invalidatePresentation()
         return true
     }
 
@@ -505,6 +565,7 @@ final class CalendarStore: ObservableObject {
     }
 
     private func rebuildOccurrences() {
+        invalidatePresentation()
         localItems = items.map { $0.localized(in: timeZone) }
         recordJSON = CalendarEngine.encode(allItems) ?? "[]"
         occurrenceCache.removeAll(keepingCapacity: true)

@@ -2,12 +2,91 @@ import Foundation
 
 @main
 enum CalendarDataChecks {
-    static func main() throws {
+    static func main() async throws {
         checkTimeZones()
+        checkWeekStartsAndCacheInvalidation()
         try checkHolidayFeed()
+        try await checkHolidayRefreshAndOfflineFallback()
         try checkBackupAndCalendarFiles()
         checkReminders()
-        print("Calendar time-zone, holiday, reminder and file checks passed")
+        print("Calendar time-zone, grid cache, holiday, reminder and file checks passed")
+    }
+
+    private static func checkHolidayRefreshAndOfflineFallback() async throws {
+        let suite = "calendar-feed-check-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HolidayFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let endpoint = URL(string: "https://calendar-fixture.invalid/holidays.json")!
+        let feed = HolidayFeed(defaults: defaults, session: session, endpoints: [endpoint])
+        HolidayFixtureProtocol.reset()
+        async let first = feed.refresh(force: true)
+        async let second = feed.refresh(force: true)
+        let results = await (first, second)
+        precondition(results.0 == results.1 && results.0.includes(2027))
+        let downloaded = await feed.status()
+        precondition(downloaded.outcome == .updated && downloaded.checkedAt != nil)
+        precondition(HolidayFixtureProtocol.requestCount == 1)
+        _ = await feed.refresh()
+        precondition(HolidayFixtureProtocol.requestCount == 1, "Automatic refresh must respect the daily interval")
+        _ = await feed.refresh(force: true)
+        let unchanged = await feed.status()
+        precondition(unchanged.outcome == .current && HolidayFixtureProtocol.requestCount == 2)
+
+        HolidayFixtureProtocol.setOffline()
+        let fallback = await feed.refresh(force: true)
+        let failed = await feed.status()
+        precondition(fallback == results.0 && failed.outcome == .offline)
+        precondition(failed.checkedAt == unchanged.checkedAt, "Failure must not pretend a successful check")
+        let reopened = HolidayFeed(defaults: defaults, session: session, endpoints: [endpoint])
+        let restored = await reopened.status()
+        precondition(restored.years == downloaded.years && restored.outcome == .offline)
+    }
+
+    private static func checkWeekStartsAndCacheInvalidation() {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let scripts = ["prototype/vendor/lunar-1.7.8.js", "prototype/dates.js", "ios/CalendarApp/NativeBridge.js"].map {
+            root.appendingPathComponent($0)
+        }
+        let suite = "calendar-cache-check-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = CalendarStore(defaults: defaults, engine: CalendarEngine(scriptURLs: scripts))
+        let month = CivilDay(2026, 11, 17)
+        let monday = store.monthCells(containing: month, weekStart: .monday)
+        let sunday = store.monthCells(containing: month, weekStart: .sunday)
+        precondition(monday.count == 42 && sunday.count == 42)
+        precondition(monday.first?.day == CivilDay(2026, 10, 26))
+        precondition(sunday.first?.day == CivilDay(2026, 11, 1))
+        precondition(CalendarWeekStart.sunday.start(of: CivilDay(2027, 1, 1)) == CivilDay(2026, 12, 27))
+        precondition(CalendarWeekStart.monday.start(of: CivilDay(2027, 1, 1)) == CivilDay(2026, 12, 28))
+
+        // Warm a month, then edit its data: cached event dots must not survive changes.
+        let revision = store.presentationRevision
+        let item = CalendarItem(id: "cache-fixture", kind: .countdown, title: "Cache check", date: month.key)
+        store.save(item)
+        precondition(store.presentationRevision > revision)
+        precondition(store.monthCells(containing: month, weekStart: .monday).first { $0.day == month }!.kinds.contains(.countdown))
+        store.remove(item.id)
+        precondition(!store.monthCells(containing: month, weekStart: .monday).first { $0.day == month }!.kinds.contains(.countdown))
+
+        // Imported records and timezone conversion also affect date-cell presentation.
+        let linked = CalendarItem(id: "linked-cache", kind: .event, title: "Imported", date: month.key, linkedSource: "Test")
+        store.setLinkedItems([linked])
+        precondition(store.monthCells(containing: month, weekStart: .sunday).first { $0.day == month }!.kinds.contains(.event))
+        store.setLinkedItems([])
+        precondition(!store.items(on: month).contains { $0.id == linked.id })
+
+        // Exercise eviction, and switch the year layout without stale weekday offsets.
+        for offset in 0..<24 { _ = store.monthCells(containing: month.movingMonths(offset), weekStart: .monday) }
+        precondition(store.monthCells(containing: month, weekStart: .sunday).first?.day == CivilDay(2026, 11, 1))
+        let leapFebruary = store.yearMonths(2028, weekStart: .monday)[1]
+        precondition(leapFebruary.count == 29)
+        let january = store.yearMonths(2027, weekStart: .sunday)[0]
+        precondition(january.offset == 5 && january.count == 31)
     }
 
     private static func checkReminders() {
@@ -110,7 +189,46 @@ enum CalendarDataChecks {
         precondition(cached.day(on: CivilDay(2027, 1, 31))?.isOff == false)
         precondition(cached.day(on: CivilDay(2027, 2, 11))?.name == "春节")
         precondition(!cached.includes(2028))
+        let status = HolidaySyncStatus(years: [2027, 2029], generated: cached.generated,
+                                       checkedAt: .now, attemptedAt: .now, source: nil, outcome: .offline)
+        precondition(status.coveredYears == [2026, 2027, 2029])
+        precondition(!status.coveredYears.contains(2028))
+        precondition(status.message.contains("已保存"))
         let invalid = fixture(generated: "20261107T090000Z", winterBreak: "2027-02-30")
         precondition((try? HolidaySchedule(feed: invalid)) == nil)
     }
+}
+
+private final class HolidayFixtureProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var count = 0
+    private static var offline = false
+    static var requestCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+    static func reset() { lock.lock(); defer { lock.unlock() }; count = 0; offline = false }
+    static func setOffline() { lock.lock(); defer { lock.unlock() }; offline = true }
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "calendar-fixture.invalid" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock()
+        Self.count += 1
+        let offline = Self.offline
+        Self.lock.unlock()
+        if offline {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
+        let data = Data("""
+        {"Generated":"20261118T090000Z","Timezone":"Asia/Shanghai","Years":{"2027":[
+        {"Name":"元旦","StartDate":"2027-01-01","EndDate":"2027-01-03","CompDays":[]},
+        {"Name":"春节","StartDate":"2027-02-05","EndDate":"2027-02-13","CompDays":[]},
+        {"Name":"清明节","StartDate":"2027-04-03","EndDate":"2027-04-05","CompDays":[]},
+        {"Name":"劳动节","StartDate":"2027-05-01","EndDate":"2027-05-05","CompDays":[]},
+        {"Name":"国庆节","StartDate":"2027-10-01","EndDate":"2027-10-07","CompDays":[]}]}}
+        """.utf8)
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

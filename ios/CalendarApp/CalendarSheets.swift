@@ -3,6 +3,7 @@ import UIKit
 import UserNotifications
 
 struct DateJumpSheet: View {
+    @AppStorage(CalendarPreferences.weekStartKey) private var weekStart = CalendarWeekStart.monday
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: CivilDay
     @State private var draft = Date()
@@ -21,7 +22,7 @@ struct DateJumpSheet: View {
             }
             .background { CalendarTheme.background }
             .environment(\.timeZone, CivilDay.calendar.timeZone)
-            .environment(\.calendar, CivilDay.calendar)
+            .environment(\.calendar, weekStart.calendar)
             .navigationTitle("选择日期")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -595,9 +596,9 @@ struct AlmanacSheet: View {
                                 Text(hour.branch).font(.subheadline.bold())
                                 Text(hour.luck).font(.caption2)
                             }
-                            .foregroundStyle(hour.id == displayed?.id ? Color.white : CalendarTheme.ink)
+                            .foregroundStyle(hour.id == displayed?.id ? CalendarTheme.onInk : CalendarTheme.ink)
                             .frame(minWidth: 40, minHeight: 47)
-                            .background(hour.id == displayed?.id ? CalendarTheme.ink : .white.opacity(0.58),
+                            .background(hour.id == displayed?.id ? CalendarTheme.ink : CalendarTheme.subtleFill,
                                         in: RoundedRectangle(cornerRadius: 11))
                         }
                         .buttonStyle(.plain)
