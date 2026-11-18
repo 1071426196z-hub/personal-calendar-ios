@@ -1,180 +1,78 @@
 import AppIntents
+import ActivityKit
 import SwiftUI
 import WidgetKit
 
-private enum WidgetStyle {
-    static let accent = Color(red: 0.88, green: 0.19, blue: 0.22)
-}
-
-private struct WidgetGlass: View {
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        ZStack {
-            scheme == .dark ? Color(red: 0.10, green: 0.12, blue: 0.18) : Color(red: 0.96, green: 0.97, blue: 1)
-            RadialGradient(colors: [Color(red: 0.48, green: 0.64, blue: 1).opacity(scheme == .dark ? 0.38 : 0.32), .clear],
-                           center: .topLeading, startRadius: 0, endRadius: 150)
-            RadialGradient(colors: [Color(red: 1, green: 0.42, blue: 0.59).opacity(scheme == .dark ? 0.25 : 0.24), .clear],
-                           center: .topTrailing, startRadius: 0, endRadius: 120)
-            RadialGradient(colors: [Color(red: 0.40, green: 0.90, blue: 0.81).opacity(scheme == .dark ? 0.19 : 0.29), .clear],
-                           center: .bottomTrailing, startRadius: 0, endRadius: 140)
-        }
+private extension View {
+    func calendarWidgetSurface() -> some View {
+        containerBackground(.ultraThinMaterial, for: .widget)
     }
 }
 
-private struct CalendarWidgetEntry: TimelineEntry {
-    let date: Date
-    let day: CivilDay
-    let lunar: String
-    let label: String
-
-    init(date: Date, engine: CalendarEngine? = nil) {
-        self.date = date
-        day = CivilDay.localDay(containing: date)
-        let facts = day.supported ? engine?.facts(day) : nil
-        lunar = facts?.lunarText ?? ""
-        label = facts.flatMap { $0.festival.isEmpty ? $0.term : $0.festival } ?? ""
-    }
+enum WidgetWeekStart: String, AppEnum {
+    case monday, sunday
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "每周起始")
+    static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [.monday: "周一", .sunday: "周日"]
+    var value: CalendarWeekStart { self == .monday ? .monday : .sunday }
 }
 
-private struct CalendarWidgetProvider: TimelineProvider {
-    func placeholder(in context: Context) -> CalendarWidgetEntry { CalendarWidgetEntry(date: .now) }
+struct TodayWidgetIntent: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "设置日历"
+    @Parameter(title: "每周起始", default: .monday) var weekStart: WidgetWeekStart
+    @Parameter(title: "显示宜忌摘要", default: false) var showAlmanac: Bool
+}
 
-    func getSnapshot(in context: Context, completion: @escaping (CalendarWidgetEntry) -> Void) {
-        completion(CalendarWidgetEntry(date: .now, engine: CalendarEngine()))
+private struct TodayWidgetEntry: TimelineEntry {
+    let snapshot: CalendarWidgetEntry
+    let configuration: TodayWidgetIntent
+    var date: Date { snapshot.date }
+}
+
+private struct CalendarWidgetProvider: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> TodayWidgetEntry {
+        TodayWidgetEntry(snapshot: CalendarWidgetEntry(date: .now), configuration: TodayWidgetIntent())
     }
-
-    func getTimeline(in context: Context, completion: @escaping (Timeline<CalendarWidgetEntry>) -> Void) {
+    func snapshot(for configuration: TodayWidgetIntent, in context: Context) async -> TodayWidgetEntry {
+        TodayWidgetEntry(snapshot: CalendarWidgetEntry(date: .now, engine: CalendarEngine(),
+            holidays: HolidayFeed.saved(), showAlmanac: configuration.showAlmanac), configuration: configuration)
+    }
+    func timeline(for configuration: TodayWidgetIntent, in context: Context) async -> Timeline<TodayWidgetEntry> {
+        let holidays = await HolidayFeed.shared.refresh()
         let engine = CalendarEngine()
-        let entries = widgetDates().map { CalendarWidgetEntry(date: $0, engine: engine) }
-        completion(Timeline(entries: entries, policy: .atEnd))
+        let entries = widgetDates().map {
+            TodayWidgetEntry(snapshot: CalendarWidgetEntry(date: $0, engine: engine, holidays: holidays,
+                showAlmanac: configuration.showAlmanac), configuration: configuration)
+        }
+        return Timeline(entries: entries, policy: .atEnd)
+    }
+}
+
+private struct TodayWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: TodayWidgetEntry
+    var body: some View {
+        CalendarWidgetFace(entry: entry.snapshot, family: family, weekStart: entry.configuration.weekStart.value)
+            .calendarWidgetSurface()
     }
 }
 
 private func widgetDates() -> [Date] {
     let now = Date()
-    let calendar = Calendar(identifier: .gregorian)
+    let calendar = CivilDay.localCalendar()
     let midnight = calendar.startOfDay(for: now)
     return [now] + (1...7).compactMap { calendar.date(byAdding: .day, value: $0, to: midnight) }
 }
 
-private struct CalendarWidgetView: View {
-    @Environment(\.widgetFamily) private var family
-    let entry: CalendarWidgetEntry
-
-    var body: some View {
-        Group {
-            switch family {
-            case .systemMedium:
-                HStack(spacing: 15) {
-                    daySummary
-                        .frame(width: 88, alignment: .leading)
-                    Divider().opacity(0.48)
-                    MonthWidgetGrid(day: entry.day, expanded: false)
-                }
-            case .systemLarge:
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(verbatim: "\(entry.day.year)年\(entry.day.month)月")
-                            .font(.title2.bold())
-                        Spacer()
-                        Text(entry.lunar)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    MonthWidgetGrid(day: entry.day, expanded: true)
-                    if !entry.label.isEmpty {
-                        Text(entry.label).font(.subheadline.weight(.semibold)).foregroundStyle(WidgetStyle.accent)
-                            .widgetAccentable()
-                    }
-                }
-            default:
-                daySummary
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .containerBackground(for: .widget) { WidgetGlass() }
-        .widgetURL(URL(string: family == .systemSmall ? "personalglasscalendar://today" : "personalglasscalendar://month"))
-    }
-
-    private var daySummary: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(verbatim: "\(entry.day.month)月 · \(entry.day.weekdayLabel)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text(verbatim: String(entry.day.day))
-                .font(.system(size: 55, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(WidgetStyle.accent)
-                .widgetAccentable()
-                .accessibilityLabel(entry.day.label)
-            if !entry.lunar.isEmpty {
-                Text(entry.lunar).font(.caption.weight(.medium)).lineLimit(1)
-            }
-            if !entry.label.isEmpty {
-                Text(entry.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-        }
-    }
-}
-
-private struct MonthWidgetGrid: View {
-    let day: CivilDay
-    let expanded: Bool
-
-    var body: some View {
-        let start = day.monthStart
-        let rowCount = (start.weekday + start.daysInMonth + 6) / 7
-        Grid(horizontalSpacing: 3, verticalSpacing: expanded ? 4 : 2) {
-            GridRow {
-                ForEach(CivilDay.weekdays, id: \.self) { weekday in
-                    Text(weekday)
-                        .font(.system(size: expanded ? 13 : 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityHidden(true)
-                }
-            }
-            ForEach(0..<rowCount, id: \.self) { row in
-                GridRow {
-                    ForEach(0..<7, id: \.self) { column in
-                        let number = row * 7 + column - start.weekday + 1
-                        if (1...start.daysInMonth).contains(number) {
-                            dateCell(number)
-                        } else {
-                            Color.clear.frame(maxWidth: .infinity, minHeight: expanded ? 25 : 15)
-                                .accessibilityHidden(true)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func dateCell(_ number: Int) -> some View {
-        let selected = number == day.day
-        let size: CGFloat = expanded ? 25 : 15
-        return Text(verbatim: String(number))
-            .font(.system(size: expanded ? 16 : 10, weight: selected ? .bold : .medium).monospacedDigit())
-            .foregroundStyle(selected ? WidgetStyle.accent : Color.primary)
-            .frame(width: size, height: size)
-            .background(selected ? WidgetStyle.accent.opacity(0.18) : .clear, in: Circle())
-            .widgetAccentable(selected)
-            .frame(maxWidth: .infinity)
-            .accessibilityLabel(CivilDay(day.year, day.month, number).label)
-            .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
 private struct TodayAndMonthWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "PersonalCalendar.TodayAndMonth", provider: CalendarWidgetProvider()) { entry in
-            CalendarWidgetView(entry: entry)
+        AppIntentConfiguration(kind: "PersonalCalendar.TodayAndMonth", intent: TodayWidgetIntent.self,
+                               provider: CalendarWidgetProvider()) { entry in
+            TodayWidgetView(entry: entry)
         }
         .configurationDisplayName("日历")
         .description("查看今日农历、节日或整月日期。")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryInline, .accessoryRectangular, .accessoryCircular])
+        .containerBackgroundRemovable(true)
     }
 }
 
@@ -215,40 +113,19 @@ private struct CountdownWidgetProvider: AppIntentTimelineProvider {
 }
 
 private struct CountdownWidgetView: View {
+    @Environment(\.widgetFamily) private var family
     let entry: CountdownWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(entry.configuration.label, systemImage: "hourglass")
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-            Spacer(minLength: 2)
-            if let target = entry.target, let days = entry.days {
-                Text(days == 0 ? "就是今天" : (days > 0 ? "还有" : "已过"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if days != 0 {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(verbatim: String(abs(days)))
-                            .font(.system(size: 39, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .widgetAccentable()
-                        Text("天").font(.caption.weight(.medium))
-                    }
-                    .foregroundStyle(WidgetStyle.accent)
-                    .minimumScaleFactor(0.65)
-                    .lineLimit(1)
-                }
-                Text(target.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            } else {
-                Text("长按小组件设置日期")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .containerBackground(for: .widget) { WidgetGlass() }
-        .widgetURL(URL(string: entry.target.map { "personalglasscalendar://day/\($0.key)" } ?? "personalglasscalendar://today"))
+        DayCountWidgetFace(
+            title: entry.configuration.label,
+            icon: "hourglass",
+            days: entry.days.map { abs($0) },
+            status: entry.days.map { $0 == 0 ? "就是今天" : ($0 > 0 ? "还有" : "已过") } ?? "",
+            note: entry.target?.label ?? "",
+            target: entry.target, family: family
+        )
+        .calendarWidgetSurface()
     }
 }
 
@@ -260,7 +137,85 @@ private struct CountdownWidget: Widget {
         }
         .configurationDisplayName("倒数日")
         .description("在桌面查看自选日期还有几天。")
-        .supportedFamilies([.systemSmall])
+        .supportedFamilies([.systemSmall, .accessoryInline, .accessoryRectangular, .accessoryCircular])
+        .containerBackgroundRemovable(true)
+    }
+}
+
+struct AnniversaryWidgetIntent: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "设置纪念日"
+    static let description = IntentDescription("设置名称和纪念日期，并查看下次周年。")
+
+    @Parameter(title: "名称", default: "纪念日")
+    var label: String
+
+    @Parameter(title: "纪念日期")
+    var target: Date?
+
+    @Parameter(title: "显示下次周年", default: true)
+    var showNextAnniversary: Bool
+}
+
+private struct AnniversaryWidgetEntry: TimelineEntry {
+    let date: Date
+    let configuration: AnniversaryWidgetIntent
+
+    var target: CivilDay? { configuration.target.map(CivilDay.localDay) }
+
+    var elapsed: Int? {
+        target.map { $0.distance(to: CivilDay.localDay(containing: date)) }
+    }
+
+    var note: String {
+        guard let target else { return "" }
+        let today = CivilDay.localDay(containing: date)
+        guard configuration.showNextAnniversary, today > target else { return target.label }
+        let years = today.year - target.year
+        let thisYear = target.movingMonths(years * 12)
+        if thisYear == today { return "今天是第 \(years) 个周年" }
+        let next = thisYear < today ? target.movingMonths((years + 1) * 12) : thisYear
+        return "下次周年还有 \(today.distance(to: next)) 天"
+    }
+}
+
+private struct AnniversaryWidgetProvider: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> AnniversaryWidgetEntry {
+        var configuration = AnniversaryWidgetIntent()
+        configuration.target = Calendar.current.date(byAdding: .day, value: -268, to: .now)
+        return AnniversaryWidgetEntry(date: .now, configuration: configuration)
+    }
+
+    func snapshot(for configuration: AnniversaryWidgetIntent, in context: Context) async -> AnniversaryWidgetEntry {
+        if context.isPreview, configuration.target == nil { return placeholder(in: context) }
+        return AnniversaryWidgetEntry(date: .now, configuration: configuration)
+    }
+
+    func timeline(for configuration: AnniversaryWidgetIntent, in context: Context) async -> Timeline<AnniversaryWidgetEntry> {
+        Timeline(entries: widgetDates().map { AnniversaryWidgetEntry(date: $0, configuration: configuration) }, policy: .atEnd)
+    }
+}
+
+private struct AnniversaryWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: AnniversaryWidgetEntry
+    var body: some View {
+        DayCountWidgetFace(title: entry.configuration.label, icon: "heart", days: entry.elapsed.map { abs($0) },
+            status: entry.elapsed.map { $0 == 0 ? "就是今天" : ($0 > 0 ? "已经过去" : "距纪念日") } ?? "",
+            note: entry.note, target: entry.target, family: family)
+            .calendarWidgetSurface()
+    }
+}
+
+private struct AnniversaryWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: "PersonalCalendar.Anniversary", intent: AnniversaryWidgetIntent.self,
+                               provider: AnniversaryWidgetProvider()) { entry in
+            AnniversaryWidgetView(entry: entry)
+        }
+        .configurationDisplayName("纪念日")
+        .description("查看纪念日已经过去的天数和下次周年。")
+        .supportedFamilies([.systemSmall, .accessoryInline, .accessoryRectangular, .accessoryCircular])
+        .containerBackgroundRemovable(true)
     }
 }
 
@@ -269,5 +224,56 @@ struct PersonalCalendarWidgets: WidgetBundle {
     var body: some Widget {
         TodayAndMonthWidget()
         CountdownWidget()
+        AnniversaryWidget()
+        CalendarLiveWidget()
+    }
+}
+
+private struct CalendarLiveWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: CalendarLiveAttributes.self) { context in
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.clock").font(.title3).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(context.state.title).font(.headline).lineLimit(2).privacySensitive()
+                    Text(context.state.target, style: .time).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                timer(context).font(.title3.weight(.semibold))
+            }
+            .padding(16)
+            .widgetURL(context.attributes.link)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) { Image(systemName: "calendar.badge.clock").foregroundStyle(.red) }
+                DynamicIslandExpandedRegion(.trailing) { timer(context) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack {
+                        Text(context.state.title).lineLimit(1).privacySensitive()
+                        Spacer(minLength: 6)
+                        Text(context.state.target, style: .time).foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                }
+            } compactLeading: {
+                Image(systemName: "calendar").foregroundStyle(.red)
+            } compactTrailing: {
+                timer(context).font(.caption.weight(.semibold))
+            } minimal: {
+                Image(systemName: "calendar").foregroundStyle(.red)
+            }
+            .widgetURL(context.attributes.link)
+        }
+    }
+
+    @ViewBuilder private func timer(_ context: ActivityViewContext<CalendarLiveAttributes>) -> some View {
+        if context.isStale {
+            Text("已到时间")
+        } else {
+            Text(timerInterval: context.state.begins...context.state.target, countsDown: true, showsHours: false)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
     }
 }
