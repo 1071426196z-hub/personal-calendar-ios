@@ -201,7 +201,7 @@ struct CalendarItem: Codable, Equatable, Identifiable {
         let anchor: Date?
         if reminder == .morning || !isTimed {
             anchor = day.instant(at: "09:00", in: calendar.timeZone)
-        } else if (repeatRule ?? .none) == .none, let startInstant {
+        } else if (repeatRule ?? RepeatRule.none) == RepeatRule.none, let startInstant {
             anchor = startInstant
         } else if let start {
             anchor = day.instant(at: start, in: calendar.timeZone)

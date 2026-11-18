@@ -54,6 +54,7 @@ enum CalendarDataChecks {
         let suite = "calendar-cache-check-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(Data("[]".utf8), forKey: "personal-calendar-items-v1")
         let store = CalendarStore(defaults: defaults, engine: CalendarEngine(scriptURLs: scripts))
         let month = CivilDay(2026, 11, 17)
         let monday = store.monthCells(containing: month, weekStart: .monday)
@@ -74,7 +75,8 @@ enum CalendarDataChecks {
         precondition(!store.monthCells(containing: month, weekStart: .monday).first { $0.day == month }!.kinds.contains(.countdown))
 
         // Imported records and timezone conversion also affect date-cell presentation.
-        let linked = CalendarItem(id: "linked-cache", kind: .event, title: "Imported", date: month.key, linkedSource: "Test")
+        let linked = CalendarItem(id: "linked-cache", kind: .event, title: "Imported", date: month.key,
+                                  endDate: month.key, allDay: true, linkedSource: "Test")
         store.setLinkedItems([linked])
         precondition(store.monthCells(containing: month, weekStart: .sunday).first { $0.day == month }!.kinds.contains(.event))
         store.setLinkedItems([])
