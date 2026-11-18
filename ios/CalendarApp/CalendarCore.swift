@@ -553,6 +553,7 @@ final class CalendarStore: ObservableObject {
     }
 
     func setLinkedItems(_ incoming: [CalendarItem]) {
+        guard incoming != linkedItems else { return }
         linkedItems = incoming
         rebuildOccurrences()
     }

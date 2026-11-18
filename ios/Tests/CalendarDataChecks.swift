@@ -79,6 +79,9 @@ enum CalendarDataChecks {
                                   endDate: month.key, allDay: true, linkedSource: "Test")
         store.setLinkedItems([linked])
         precondition(store.monthCells(containing: month, weekStart: .sunday).first { $0.day == month }!.kinds.contains(.event))
+        let linkedRevision = store.presentationRevision
+        store.setLinkedItems([linked])
+        precondition(store.presentationRevision == linkedRevision, "Unchanged imports must not invalidate warm pages")
         store.setLinkedItems([])
         precondition(!store.items(on: month).contains { $0.id == linked.id })
 
@@ -156,6 +159,9 @@ enum CalendarDataChecks {
         precondition(converted.date == "2027-01-01" && converted.endDate == "2027-01-01")
         precondition(converted.start == "16:00" && converted.end == "17:00")
         precondition(converted.localized(in: shanghai).start == "08:00")
+        var alerted = item
+        alerted.reminder = .atStart
+        precondition(alerted.reminderFireDate(on: CivilDay(2027, 1, 1), in: CivilDay.localCalendar(in: losAngeles)) == start)
 
         let gap = CivilDay(2027, 3, 14)
         precondition(gap.instant(at: "02:30", in: losAngeles) == nil)
